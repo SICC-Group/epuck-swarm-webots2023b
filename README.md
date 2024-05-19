@@ -2,8 +2,7 @@
 This repository is an implementation of the framework for hashgraph-based swarm robotics.
 There are two case studies in this repository, one is black-white ratio estimation and the other is object searching.
 
-The corresponding article: A Fast and Robust Solution for Common Knowledge Formation in Decentralized Swarm Robots(https://link.springer.com/article/10.1007/
-s10846-022-01759-1)
+The corresponding article: A Fast and Robust Solution for Common Knowledge Formation in Decentralized Swarm Robots(https://link.springer.com/article/10.1007/s10846-022-01759-1)
 
 The source code address of this repository: https://github.com/LuoJie996/swarm-hashgraph
 ## Requirements
@@ -15,7 +14,7 @@ pip install py-swirld
 ```
 ## Install
 ###
-    git clone https://github.com/luoxiaojie9527/swarm-hashgraph.git
+    git clone git@github.com:SICC-Group/swarm-hashgraph-webots2023b.git
 ## Usage
 object-searching:
 1. Launch the Hashgrpah process
