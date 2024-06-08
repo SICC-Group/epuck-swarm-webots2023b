@@ -1,4 +1,4 @@
-#VRML_SIM R2023b utf8 
+#VRML_SIM R2023b utf8
 
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
@@ -23,7 +23,7 @@ TexturedBackgroundLight {
   texture "empty_office"
 }
 RectangleArena {
-  rotation 0.0 0.0 1.0 1.5707963267948966
+  rotation 0 0 1 1.5707963267948966
   floorSize 2 2
   floorTileSize 2 2
   floorAppearance Appearance {
@@ -44,10 +44,10 @@ RectangleArena {
 DEF EnvSet_supervisor Robot {
   children [
     Camera {
-      translation 0 0 2.0
+      translation 0 0 2
       rotation 0 -1 0 -1.57
       children [
-        Transform {
+        Pose {
           rotation 0 -1 0 -1.57
           children [
             Shape {
@@ -75,7 +75,7 @@ DEF EnvSet_supervisor Robot {
 }
 DEF Position_Talker Robot {
   name "robot(1)"
-  controller ""
+  controller "<none>"
   supervisor TRUE
 }
 DEF Table Shape {
@@ -92,10 +92,10 @@ DEF Table Shape {
         1.01 1.01 -0.01
         -1.01 1.01 -0.01
         -1.01 -1.01 -0.01
-        0.8 -0.8 -1.0
-        0.8 0.8 -1.0
-        -0.8 0.8 -1.0
-        -0.8 -0.8 -1.0
+        0.8 -0.8 -1
+        0.8 0.8 -1
+        -0.8 0.8 -1
+        -0.8 -0.8 -1
       ]
     }
     coordIndex [

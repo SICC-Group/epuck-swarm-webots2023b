@@ -1,564 +1,233 @@
-#!/usr/bin/python3
-# coding=UTF-8
-
-from controller import Supervisor
-import math,random
+#!/usr/bin/python-webots
+import os, sys
+import random
+import yaml
+import random
+from datetime import datetime
 import socket
-import os
-import time
-import _thread as thread
-import logging
+import threading
+import traceback
+from copy import deepcopy
 
-robot = Supervisor()
-timestep =640
-N = 6
-group_number = 1
-groups = {0:[],1:[],2:[],3:[]}
-swarm =[]
+from controller import LED, Supervisor
+import numpy as np
 
-for i in range(N):
-    groups[i % group_number].append(i)
-print(groups)    
-for g in groups.keys():
-    swarm.extend(groups[g])
-print(swarm)    
-f = open("/home/syc/commRanger.txt","r")
-X = int(f.readline())
-f.close()         
-X = 0
-ranger_robots=list(range(N)[:X])
-print(ranger_robots)
+current_dir = os.path.dirname(__file__)
+exp_path = os.path.join(current_dir, "..", "..")
+# sys.path.append(exp_path)
+# from torch_models import *
 
-# create the Robot instance.
 
-commRange =[0.64 if _ in ranger_robots else 0.16 for _ in swarm] 
-def init():
-    USE_FLAT_TILE = True
-    black_ratio_real = 0.40
-    blacktiles=random.sample(range(400),int(400*black_ratio_real)) 
-    if USE_FLAT_TILE:
-        x_z = [(-1.05+0.1*(i+1),-1.05+0.1*(j+1)) for i in range(20) for j in range(20)]
-    else:
-        x_z = [(-1.05+0.1*(i+1),-1.05+0.1*(j+1)) for i in range(20) for j in range(20) if i*20+j not in blacktiles]
-    y_=[0 for i in range(N)]    
-    rolist = [i / 100.0 for i in range(0,628,int(628/N))]
-    rgblist = []
-    rgblist = ['{:08b}'.format(i+1) if i in ranger_robots else "none" for i in swarm]
-    
-    # random.shuffle(zlist)
-    random.shuffle(rolist)
-    random.shuffle(x_z)
-    # print(xlist)
-    # print(zlist)
-    #importRobot(1,xlist[0],zlist[0])
-    objects=[]
-    drawtiles(blacktiles, objects, USE_FLAT_TILE)
-  
-    print("=================DEBUG5=================")
-    runs=readFile()
-    print("=================DEBUG6=================")
-    print(runs)
-    if runs > 9:
-        msg = 'echo Experiment is finished | mail -s "10 runs is finished" 2385943799@qq.com'
-        #sendmail(msg)
-        #changeFloor()
-        # changeByzNum()
-        # changeRange()
-        #changeSpeeder()
-        changeRanger()
-    print("=================DEBUG1=================")
-    #连接服务端
-    IP="localhost"
-    PORT=8888
-    socket.setdefaulttimeout(5)
-    s = socket.socket()
-    try:
-        for i in range(N):
-            j = swarm.index(i)
-            print("import robot %2d " % j)
-            importRobot(i,x_z[j][1],x_z[j][0],y_[j],rolist[j],rgblist[j])
-        s.connect((IP,PORT))
-        msg='ready'
-        msg=msg.encode()
-        s.send(msg)
+class SupervisorController:
+    def __init__(self, config, save_path) -> None:
+        self.save_path = save_path
+        self.supervisor = Supervisor()
+        self.num_robots = config["numRobots"]
+        self.ranger_robots = list(range(config["commRanger"]))
+        self.comm_ranges = [
+            config["range1"] if id in self.ranger_robots else config["range0"]
+            for id in range(self.num_robots)]
+        
+        self.group_number = config["groupNumber"]
+        self.groups = {i: [] for i in range(self.group_number)}
+        for i in range(self.num_robots):
+            self.groups[i % self.group_number].append(i)
+        self.swarm = []
+        for g in self.groups.values():
+            self.swarm.extend(g)
+        
+        # print info
+        print("========== supervisor info ==========")
+        print(f"groups: {self.groups}")
+        print(f"swarm: {self.swarm}")
+        
+        self.time_step = config["timeStep"]  # in ms
 
-        while(True):
-            print("=================DEBUG2=================")
-            res = s.recv(1024).decode()
-            print('-----------------------------------------------res:'+str(res))
-            if res=="reset":
-                print("=================DEBUG3=================")
-                # for i in range(N):
-                    # epuck=robot.getFromDef("epuck"+str(i))
-                    # epuck.restartController()                
-                print("==============================reset done")
-                break   
-    except Exception as e:
-        print("connection failed")
-    s.close
+        self.init_env(config["blackRatio"])
+        self.init_robots()
+        self.clear_file(os.path.join(self.save_path, "tmp_result.txt"))
+     
+    def init_env(self, black_ratio):
+        blacktiles = random.sample(range(400), int(400*black_ratio))
+        tiles_list = [
+            """
+            Solid {
+                translation %f %f 0.001
+                rotation 1 0 0 1.57
+                children [
+                    Shape {
+                        appearance PBRAppearance {
+                            baseColor 0 0 0
+                            emissiveColor %f %f %f
+                        }
+                        geometry Box {
+                            size 0.1 0.001 0.1
+                        }
+                    }
+                ]
+            }
+            """ % (
+                -1.05 + 0.1 * (j + 1), -1.05 + 0.1 * (i + 1), 0, 0, 0
+            ) if 20 * i + j in blacktiles else
+            """
+            Solid {
+                translation %f %f 0.001
+                rotation 1 0 0 1.57
+                children [
+                    Shape {
+                        appearance PBRAppearance {
+                            baseColor 0 0 0
+                            emissiveColor %f %f %f
+                        }
+                        geometry Box {
+                            size 0.1 0.001 0.1
+                        }
+                    }
+                ]
+            }
+            """ % (
+                -1.05 + 0.1 * (j + 1), -1.05 + 0.1 * (i + 1), 1, 1, 1
+            ) for i in range(20) for j in range(20)
+        ]
+        children_string = "".join(tiles_list)
+        line_string = """
+            DEF Floor_Tiles Solid {
+                children [
+                    %s
+                ]
+            }
+            """ % children_string
+        root = self.supervisor.getRoot()
+        chFd = root.getField("children")
+        chFd.importMFNodeFromString(-1, line_string)
+        print("========== import tiles successfully ==========")
+
+    def init_robots(self):
+        y_x = [(-1.05 + 0.1 * (i + 1), -1.05 + 0.1 * (j + 1))
+                for i in range(20) for j in range(20)]
+        starts = random.sample(y_x, self.num_robots)
+        # starts = [(i * 0.05, 0) for i in range(6)]
+        z_ = [0] * self.num_robots
+        rotation_init = [i / 100.0 for i in range(
+            0, 628, int(628 / self.num_robots))]
+        random.shuffle(rotation_init)
+        rgblist = ['{:08b}'.format(i + 1) 
+                   if i in self.ranger_robots else None for i in self.swarm]
+        for i in range(self.num_robots):
+            print(f"import robot {i:2d}")
+            if rgblist[i] is None:
+                line_string = """
+                    DEF epuck%d E-puck {
+                        translation %f %f %f
+                        rotation 0 0 1 %f
+                        name "e-puck%d"
+                        controller "black-white-ratio-estimate"
+                        customData "%d"
+                        supervisor TRUE
+                        version "1"
+                        camera_fieldOfView 0.5
+                        camera_width 48
+                        camera_height 48
+                        camera_antiAliasing TRUE
+                        camera_rotation 0 1 0 1.57
+                    }""" % (i, starts[i][1], starts[i][0], z_[i], 
+                            rotation_init[i], i, i)
+            else:
+                line_string = """
+                    DEF epuck%d E-puck{
+                        translation %f %f %f
+                        rotation 0 0 1 %f
+                        name "e-puck%d"
+                        controller "black-white-ratio-estimate1"
+                        customData "%d"
+                        supervisor TRUE
+                        version "2"
+                        camera_fieldOfView 0.5
+                        camera_width 48
+                        camera_height 48
+                        camera_antiAliasing TRUE
+                        camera_rotation 0 1 0 1.57
+                        emissiveColor %s %s %s
+                        emissiveColor2 %s %s %s
+                    }""" % (i, starts[i][1], starts[i][0], z_[i], 
+                            rotation_init[i], i, i,
+                            rgblist[-1], rgblist[-2], rgblist[-3],
+                            rgblist[-4], rgblist[-5], rgblist[-6])
             
-def resetAll():
-   
-    writeFile()
-    #robot.worldReload()
-    robot.simulationReset()
-    # for i in range(N):
-        # epuck_node=robot.getFromDef("epuck"+str(i))
-        # epuck_node.restartController()
-    supervisornode = robot.getFromDef("EnvSet_supervisor")
-    supervisornode.restartController()
-
-def changeSpeeder():
-    f = open("/home/syc/Speeder.txt","r")
-    speeder = int(f.readline())
-    f.close()
-    speederNew = speeder + 2
-    f = open("/home/syc/Speeder.txt","w+")
-    f.write(str(speederNew))
-    f.close()
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SAVE RESULT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    try:        
-        os.system("mv /home/syc/all_result.txt /home/syc/all_result_speeder"+str(speeder)+".txt")
-    except Exception as e:
-        print("exception:" + e)
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> CLEAR FILE2 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    clearFile2()
-    if speeder >= N:
-        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SendEmail >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        msg = 'cat /home/syc/all_result.txt | mail -s "Speeder Experiment is finished" 2385943799@qq.com'
-        sendmail(msg)    
-
-def changeRanger():
-    f = open("/home/syc/commRanger.txt","r")
-    commRanger = int(f.readline())
-    f.close()
-    commRangerNew = commRanger + 1
-    f = open("/home/syc/commRanger.txt","w+")
-    f.write(str(commRangerNew))
-    f.close()
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SAVE RESULT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    try:        
-        os.system("mv /home/syc/all_result.txt /home/syc/all_result_ranger"+str(commRanger)+".txt")
-    except Exception as e:
-        print("exception:" + e)
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> CLEAR FILE2 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    clearFile2()
-    if commRanger >= 10:
-        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SendEmail >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        msg = 'echo /home/syc/all_result.txt | mail -s "Ranger Experiment is finished" 2385943799@qq.com'
-        sendmail(msg)
-               
-def changeRange():
-    f = open("/home/syc/commRange.txt","r")
-    commRange = int(f.readline())
-    f.close()
-    commRangeNew = commRange + 1
-    f = open("/home/syc/commRange.txt","w+")
-    f.write(str(commRangeNew))
-    f.close()
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SAVE RESULT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    try:        
-        os.system("mv /home/syc/all_result.txt /home/syc/all_result_range"+str(commRange)+".txt")
-    except Exception as e:
-        print("exception:" + e)
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> CLEAR FILE2 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    clearFile2()
-    if commRange >= 20:
-        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SendEmail >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        msg = 'echo /home/syc/all_result.txt | mail -s "Experiment is finished" 2385943799@qq.com'
-        sendmail(msg)
+            root = self.supervisor.getRoot()
+            chFd = root.getField("children")
+            chFd.importMFNodeFromString(-1,line_string)
         
-def changeByzNum():
-    f = open("/home/syc/ByzNum.txt","r")
-    ByzNum = int(f.readline())
-    f.close()
-    ByzNumNew = ByzNum + 1
-    f = open("/home/syc/ByzNum.txt","w+")
-    f.write(str(ByzNumNew))
-    f.close()
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SAVE RESULT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    try:        
-        os.system("mv /home/syc/all_result.txt /home/syc/all_result_ByzNum"+str(ByzNum)+".txt")
-    except Exception as e:
-        print("exception:" + e)
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> CLEAR FILE2 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    clearFile2()
-    if ByzNum >= 10:
-        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SendEmail >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        msg = 'echo /home/syc/all_result.txt | mail -s "Experiment is finished" 2385943799@qq.com'
-        sendmail(msg)
-        
-def changeSpeed():
-    f = open("/home/syc/Speed.txt","r")
-    speed = int(f.readline())
-    f.close()
-    speedNew = speed + 2
-    f = open("/home/syc/Speed.txt","w+")
-    f.write(str(speedNew))
-    f.close()
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SAVE RESULT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    try:        
-        os.system("mv /home/syc/all_result.txt /home/syc/all_result_speed"+str(speed)+".txt")
-    except Exception as e:
-        print("exception:" + e)
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> CLEAR FILE2 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    clearFile2()
-    if speed >= 20:
-        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SendEmail >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        msg = 'cat /home/syc/all_result.txt | mail -s "Speed Experiment is finished" 2385943799@qq.com'
-        sendmail(msg)         
+        print("========== import robots successfully ==========")
+
+    @staticmethod
+    def clear_file(file):
+        with open(file, "w") as f:
+            f.write("")
     
-def changeFloor():
-    floor=robot.getFromDef("FloorImage")
-    url=floor.getField("url")
-    urlstr=url.getMFString(0)
-    urllist=urlstr.split('.')
-    print(urllist)
-    ratio=int(urllist[1])
-    urlstr=urllist[0]+"."+str(2+ratio)+"."+urllist[2]
-    url.setMFString(0,urlstr)
-
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SAVE RESULT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    try:        
-        os.system("mv /home/syc/all_result.txt /home/syc/all_result_"+str(ratio)+".txt")
-    except Exception as e:
-        print("exception:" + e)
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> CLEAR FILE2 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    clearFile2()
-    if ratio == 48:
-        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>> SendEmail >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-        msg = 'echo /home/syc/all_result.txt | mail -s "Experiment is finished" 2385943799@qq.com'
-        sendmail(msg)
-def mail(threadName,msg):
-    try:
-        os.system(msg)
-        print ("邮件发送成功")
-    except smtplib.SMTPException:
-        print ("Error: 无法发送邮件")     
-def sendmail(msg):
-    try:
-        thread.start_new_thread(mail,("Thread-mail",msg,))           
-    except Exception as e:
-        print(e)
-
-        
-
-def clearFile():
-    f2 = open("/home/syc/tmp_result.txt", "w")
-    f2.write('')
-    f2.close()              
-           
-def clearFile2():
-    f2 = open("/home/syc/runs.txt", "w")
-    f2.write('')
-    f2.close()
+    @staticmethod
+    def write_file(file, content, mode):
+        with open(file, mode=mode) as f:
+            f.write(content)
     
-def writeFile():
-    f2 = open("/home/syc/runs.txt", "a+")
-    f2.write('reset to next run \n')
-    f2.close()   
-
-def readFile():
-    f2 = open("/home/syc/runs.txt")
-    runs = len(f2.readlines())
-    f2.close() 
-    return runs    
+    @staticmethod
+    def file_length(file):
+        with open(file, "r") as f:
+            return len(f.readlines())
     
-def removeline():
-    root = robot.getRoot()
-    chFd = root.getField("children")
+    @staticmethod
+    def change_config(file, *args, **kwargs):
+        pass
 
-    while 1:
-        count = chFd.getCount()
-        #print(count)
-        if count > 29:
-            chFd.removeMF(count-1)
-        else:
-            break
-
-def getNeighbors():
-    pos_list = []
-    neighbor=[[0]*N for i in range(N)]
-    for i in range(N):
-        epuck=robot.getFromDef("epuck"+str(i))
-        pos=epuck.getPosition()
-        pos_list.append(pos[0:3]) 
-        for j in range(i):
-            dist=getDistance(pos_list[j],pos_list[i])
-            if dist < max(commRange[i],commRange[j]):
-                neighbor[j][i]=1
-                neighbor[i][j]=1              
-    for r in range(N):
-        for j in range(N):
-            if neighbor[r][j] == 1:
-                drawline(pos_list[r],pos_list[j])
-                
-
+    def run(self):
+        start_time = self.supervisor.getTime()
+        while self.supervisor.step(self.time_step) != -1:
+            total_time = self.supervisor.getTime() - start_time
+            now = datetime.now()
+            string = f"Exit Time: {total_time}\n"
+            string += now.strftime("%Y-%m-%d %H:%M:%S")
+            if total_time > 3000:
+                print("Exceeded max time")
+                string += "\n----------------Consensus NotReached! "
+                string += "This experiment is time-exceeded-----------------\n"
+                self.write_file(
+                    os.path.join(self.save_path, "all_result.txt"),
+                    string, mode="a+")
+                self.reset_all()
             
-def getDistance(pos1,pos2):
-    dist=(pos1[0]-pos2[0])**2+(pos1[1]-pos2[1])**2
-    return dist
-
-def drawline(pos1,pos2):
-    root = robot.getRoot()
-    chFd = root.getField("children")
-    #position = []
-    line_String = """
-                            DEF Line Shape{
-                                appearance Appearance{
-                                    material Material {
-                                        diffuseColor 1 0 0
-                                        emissiveColor 1 0 0
-                                    }
-                                }
-                                geometry IndexedLineSet {
-                                    coord Coordinate {
-                                        point [ %f 0.054 %f, %f 0.054 %f ]
-                                    }
-                                    coordIndex [1 0]
-                                }
-                                isPickable FALSE
-                            }
-                            """ % (pos1[1], pos1[0], pos2[1], pos2[0])
-    chFd.importMFNodeFromString(-1,line_String)
-        
-def importRobot(id,x,y,z,ro,rgb):
-    print("import robot %2d" % id)
-    root = robot.getRoot()
-    chFd = root.getField("children")
-    #position = []
-    if rgb == "none":
-        line_String = """
-                                DEF epuck%d E-puck{
-                                    translation %f %f %f
-                                    rotation 0 0 1 %f
-                                    name "e-puck%d"
-                                    controller "black-white-ratio-estimate"
-                                    customData "%d"
-                                    supervisor TRUE
-                                    version "1"
-                                    camera_fieldOfView 0.5
-                                    camera_width 48
-                                    camera_height 48
-                                    camera_antiAliasing TRUE
-                                    camera_rotation 0 1 0 1.57
-                                }
-                                """% (id,x,y,z,ro,id,id)
-    else:
-        line_String = """
-                                DEF epuck%d E-puck{
-                                    translation %f %f %f
-                                    rotation 0 0 1 %f
-                                    name "e-puck%d"
-                                    controller "black-white-ratio-estimate"
-                                    customData "%d"
-                                    supervisor TRUE
-                                    version "2"
-                                    camera_fieldOfView 0.5
-                                    camera_width 48
-                                    camera_height 48
-                                    camera_antiAliasing TRUE
-                                    camera_rotation 0 1 0 1.57
-                                    emissiveColor %s %s %s
-                                    emissiveColor2 %s %s %s
-                                }
-                                """% (id,x,y,z,ro,id,id,rgb[-1],rgb[-2],rgb[-3],rgb[-4],rgb[-5],rgb[-6])
-    chFd.importMFNodeFromString(-1,line_String)
+            tmp_length = self.file_length(
+                os.path.join(self.save_path, "tmp_result.txt")) 
+            if tmp_length >= self.num_robots:
+                print(f"There are {tmp_length} lines in tmp_result.txt")
+                self.clear_file(os.path.join(self.save_path, "tmp_result.txt"))
+                string += "\n----------------Consensus Reached! "
+                string += "This experiment is finished-----------------\n"
+                self.write_file(
+                    os.path.join(self.save_path, "all_result.txt"),
+                    string, mode="a+")
+                self.reset_all()
     
-def importTable():
-    root = robot.getRoot()
-    chFd = root.getField("children")
-    #position = []
-    line_String = """
-                            DEF table Shape{
-                                appearance Appearance{
-                                    material Material {
-                                        diffuseColor 0 0 0
-                                        emissiveColor 0.2 0.2 0.2
-                                    }
-                                }
-                                geometry IndexedFaceSet {
-                                    coord Coordinate {
-                                        point [ 1.01 -0.01 -1.01, -1.01 -0.01 -1.01, -1.01 -0.01 1.01, 1.01 -0.01 1.01, 0.8 -1 -0.8, -0.8 -1 -0.8, -0.8 -1 0.8, 0.8 -1 0.8 ]
-                                    }
-                                    coordIndex [ 3 7 4 0 -1  # face A, right
-                                                 2 6 7 3 -1  # face B, back
-                                                 1 5 6 2 -1  # face C, left
-                                                 0 4 5 1 -1  # face D, front
-                                                 7 6 5 4 -1  # face F, top
-                                                 3 0 1 2 ] # face E, bottom
-                                                  
-                                }
-                                isPickable FALSE
-                            }
-                            """ 
-    chFd.importMFNodeFromString(-1,line_String)
+    def reset_all(self):
+        now = datetime.now()
+        time_string = now.strftime("%Y-%m-%d %H:%M:%S")
+        self.write_file(
+            os.path.join(self.save_path, "runs.txt"),
+            f"reset to next run {time_string} \n", mode="a+")
+        self.supervisor.simulationReset()
+        supervisor_node = self.supervisor.getFromDef("EnvSet_supervisor")
+        supervisor_node.restartController()
 
-def drawtiles(black_list, object_list, use_flat):
-    root = robot.getRoot()
-    chFd = root.getField("children")
-    #position = []
-    if use_flat:
-        tiles_list = ["""
-                                        Solid {
-                                            translation %f %f 0.001
-                                            rotation 1 0 0 1.57
-                                            children [
-                                                Shape {
-                                                    appearance PBRAppearance {
-                                                        baseColor 0 0 0
-                                                        emissiveColor %f %f %f
-                                                    }
-                                                    geometry Box {
-                                                        size 0.1 0.001 0.1
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                        """ % (-1.05+0.1*(j+1),-1.05+0.1*(i+1),0,0,0) if 20*i+j in black_list else 
-                                        """
-                                        Solid {
-                                            translation %f %f 0.001
-                                            rotation 1 0 0 1.57
-                                            children [
-                                                Shape {
-                                                    appearance PBRAppearance {
-                                                        baseColor 0 0 0
-                                                        emissiveColor %f %f %f
-                                                    }
-                                                    geometry Box {
-                                                        size 0.1 0.001 0.1
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                        """ % (-1.05+0.1*(j+1),-1.05+0.1*(i+1),1,1,1) for i in range(20) for j in range(20)]
-    else:
-        tiles_list = ["""
-                                        Solid {
-                                            translation %f %f 0.001
-                                            rotation 1 0 0 1.57
-                                            children [
-                                                Shape {
-                                                    appearance PBRAppearance {
-                                                        baseColor 0 0 0
-                                                        emissiveColor %f %f %f
-                                                    }
-                                                    geometry Box {
-                                                        size 0.1 0.001 0.1
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                        """ % (-1.05+0.1*(j+1),-1.05+0.1*(i+1),0,1,1) if 20*i+j in black_list else 
-                                        """
-                                        Solid {
-                                            translation %f %f 0.001
-                                            rotation 1 0 0 1.57
-                                            children [
-                                                Shape {
-                                                    appearance Appearance {
-                                                        
-                                                        texture ImageTexture {
-                                                            url "textures/parquetry/mines2.png"
-                                                        }
-                                                        
-                                                    }
-                                                    geometry Box {
-                                                        size 0.1 0.001 0.1
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                        """ % (-1.05+0.1*(j+1),-1.05+0.1*(i+1)) if 20*i+j in object_list else
-                                        """
-                                        Solid {
-                                            translation %f %f 0.001
-                                            rotation 1 0 0 1.57
-                                            children [
-                                                Shape {
-                                                    appearance PBRAppearance {
-                                                        baseColor 0 0 0
-                                                        emissiveColor %f %f %f
-                                                    }
-                                                    geometry Box {
-                                                        size 0.1 0.001 0.1
-                                                    }
-                                                }
-                                            ]
-                                        }
-                                        """ % (-1.05+0.1*(j+1),-1.05+0.1*(i+1),1,1,1) for i in range(20) for j in range(20)]
-    children_str=""
-    for i in tiles_list:
-        children_str = children_str + i
-    line_String = """
-                            DEF Floor_Tiles Solid{
-                                children [
-                                    %s
-                                ]
-                            }
-                            """ % children_str
-    chFd.importMFNodeFromString(-1,line_String)
+
+if __name__ == '__main__':
+    save_path = os.path.join(current_dir, "..", "..", "results")
+    config_path = os.path.join(exp_path, "config.yaml")
+    runs = SupervisorController.file_length(
+        os.path.join(save_path, "runs.txt"))
+    print(f"===== runs at {runs} =====")
+    # if runs > 9:
+    #     SupervisorController.change_config(config_path)
     
-
-
-
-    
-# Main loop:
-# - perform simulation steps until Webots is stopping the controller
-
-
-    #time.sleep(3)
-
-init()
-clearFile()
-start_time=robot.getTime()
-oldtime = robot.getTime()
-while robot.step(timestep) != -1:
-    newtime = robot.getTime()
-    timediff = newtime -oldtime
-    #print(timediff)
-    # removeline()
-    # if timediff > 1:
-        # oldtime = newtime
-        # getNeighbors()
-    filename = "/home/syc/tmp_result.txt"
-    myfile = open(filename)
-    lines = len(myfile.readlines())
-    myfile.close()
-    
-    end_time=robot.getTime()
-    total_time=end_time - start_time
-    if(total_time > 3000):
-        print("Exceeded max time")
-        f = open("/home/syc/all_result.txt", "a+")
-        f.write('Exit Time: ' + str(total_time) + '\n')
-        s = "----------------Consensus NotReached! This experiment is time-exceeded-----------------"
-        f.write(s)
-        f.write('\n')
-        f.close()
-        resetAll()
-        #robot.worldReload()
-        
-    if(lines >= N):   
-        print("There are %d lines in %s" % (lines, filename))
-        clearFile()
-        #Save Exit Time
-        f = open("/home/syc/all_result.txt", "a+")
-        f.write('Exit Time: ' + str(total_time) + '\n')
-        s = "----------------Consensus Reached! This experiment is finished-----------------"
-        f.write(s)
-        f.write('\n')
-        f.close()
-        resetAll()
-
-    # Read the sensors:
-    # Enter here functions to read sensor data, like:
-    #  val = ds.getValue()
-
-    # Process sensor data here.
-
-    # Enter here functions to send actuator commands, like:
-    #  motor.setPosition(10.0)
-
-# Enter here exit cleanup code.
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    my_controller = SupervisorController(config, save_path)
+    my_controller.run()

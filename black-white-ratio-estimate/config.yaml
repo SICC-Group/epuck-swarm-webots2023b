@@ -1,0 +1,9 @@
+numRobots: 6
+byzNum: 2
+byzStyle: 2  # choice: 0, 1 or any for random
+range0: 0.25  # for common robots
+range1: 1  # for ranger robots
+commRanger: 0
+groupNumber: 1
+blackRatio: 0.4
+timeStep: 640

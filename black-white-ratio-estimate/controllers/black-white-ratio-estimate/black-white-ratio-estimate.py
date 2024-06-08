@@ -1,590 +1,401 @@
-#!/usr/bin/python3
-# coding=UTF-8
-from controller import Robot,Camera,LED,Supervisor
-import time,random,math,numpy
+#!/usr/bin/python-webots
+import os, sys
+import random
+import yaml
+import random, math
 import socket
-import _thread as thread
+import threading
 import traceback
+from copy import deepcopy
 
-robot = Supervisor()
-timestep =640 #ms
-timeFactor = timestep / 100.0
-robot_id = int(robot.getCustomData())
-TURN=45 / timeFactor
-LAMDA=100 / timeFactor
-sigma=30 / timeFactor
-alpha=1.0
-sensor_num = 8
-ps_sensor_name = ['ps0','ps1','ps2','ps3','ps4','ps5','ps6','ps7']
+from controller import LED, Supervisor
+import numpy as np
+
+current_dir = os.path.dirname(__file__)
+exp_path = os.path.join(current_dir, "..", "..")
+# sys.path.append(exp_path)
+# from torch_models import *
+
+
+class RobotController:
+    def __init__(self, config, save_path) -> None:
+        self.save_path = save_path
+        self.robot = Supervisor()
+        self.robot_id = int(self.robot.getCustomData())
+        self.num_robots = config["numRobots"]
+        self.ranger_robots = list(range(config["commRanger"]))
+        self.comm_ranges = [
+            config["range1"] if id in self.ranger_robots else config["range0"]
+            for id in range(self.num_robots)]
+        self.comm_range = self.comm_ranges[self.robot_id]
+        self.speed_max = 7.5 if self.robot_id in self.ranger_robots else 5
+        # action: left and right motor speed
+        self.actions = {
+            "forward": [self.speed_max, self.speed_max],
+            "backward": [-self.speed_max, -self.speed_max],
+            "turn_left": [-self.speed_max, self.speed_max],
+            "turn_right": [self.speed_max, -self.speed_max],
+            "stop": [0, 0],
+            # "random_move": [0, 0]
+        }
+        self.last_action = "forward"
+        self.turn_time = 2
+        # states
+        self.image_array = None  # 2-D rgb list
+        self.ps_sensor_value = []  # 8 values
+        self.position = []  # x, y, z
+
+        # self.byz_robots = random.sample(
+        #     list(range(self.num_robots)), config["byzNum"])
+        self.byz_robots = [0, 1]
+        self.byz_style = config["byzStyle"]
+
+        self.group_number = config["groupNumber"]
+        self.groups = {i: [] for i in range(self.group_number)}
+        for i in range(self.num_robots):
+            self.groups[i % self.group_number].append(i)
+        self.group_id = self.robot_id % self.group_number
         
-N = 6
-group_number = 1
-groups = {0:[],1:[],2:[],3:[]}
-
-for i in range(N):
-    groups[i % group_number].append(i)
+        # print info
+        print("========== robot info ==========")
+        print(f"ranger_robots: {self.ranger_robots}")
+        print(f"byzantine_robots: {self.byz_robots}")
         
-f = open("/home/syc/commRanger.txt","r")
-X = int(f.readline())
-f.close()         
-X = 0
-ranger_robots=list(range(N)[:X])
-print("ranger_robots=:%s" % str(ranger_robots))
-f = open("/home/syc/ByzNum.txt","r")
-B = int(f.readline())
-f.close() 
-B = 2
-byzantine_robots = list(range(N)[:B])
-print("byzantine_robots=:%s" % str(byzantine_robots))
-byzantine_style = '2' #or '1' or '2'
-center = [[0.6,0.6],[-0.6,0.6],[-0.6,-0.6],[0.6,-0.6]]
-# X is the amount of ranger_robots in each group
+        self.time_step = config["timeStep"]  # in ms
+        self.init_time_variables()
+        self.init_env_variables()
+        self.init_device_variables()
+        self.init_socket()
 
-termination_time_ticks = 4000
+    def init_time_variables(self):
+        self.step = 0  # simulation steps
+        # self.time_step = int(robot.getBasicTimeStep())  #  32 ms
+        self.time_factor = self.time_step / 100.0
+        self.turn = 45 / self.time_factor  # don't konw why it is named
+        self._lambda = 100 / self.time_factor
+        self.sigma = 30 / self.time_factor
+        self.termination_time_ticks = 4000
+        # remaining_sync_time = math.ceil(20 / time_factor)
+        self.remaining_sync_time = -1
+        self.remaining_time = math.ceil(np.random.exponential(self._lambda))
+        self.remaining_exploration_time = math.ceil(self.sigma)
+        self.action_time = 0
 
-for i in range(group_number):
-    if robot_id in groups[i]:
-        group_id = i
+    def init_env_variables(self):
+        # variables related to environment
+        self.black_count = 0
+        self.white_count = 0
+        self.vote = 0
+        self.vote_round = 0
+        self.opinion = ""
+        self.quality = random.random()
+        self.direction = 0
+        self.votes = []
+        self.phase = "explore"  # ["explore", "diffuse"]
+        self.dist_threshold = 100
+        self.thread_currently_running = False
+        self.res = ""
+        self.stop_loop = False
+        self.vote_flag = False
+        self.sync_flag = False
+        self.consensus_reached = False
+        self.neighbors = [0] * self.num_robots
+        self.neighbors_dist = [0] * self.num_robots
+        self.last_front_obstacle = False
 
-
-##################################
-####       Turn LEDs On       ####         
-################################## 
-def TurnLeds(): 
-    global opinion    
-    if opinion == 1:   
-        led[1].set(0x00ff00) #green for white
-        pass
-    elif opinion == 2:  
-        led[1].set(0x0000ff) #blue for black
-
-##################################
-####        Movement          ####         
-################################## 
-def Move():
-    if direction == 0:
-        forward()
-    elif direction == 1:
-        # turnRight()
-        forward()
-    elif direction == 2:
-        # turnLeft()
-         forward()
-def randomMove():
-    random_num = -1+2*random.random()
-    left_motor.setVelocity(random_num*speed_max)
-    right_motor.setVelocity(-random_num*speed_max)
-
-def turnLeft():
-    left_motor.setVelocity(-speed_max)
-    right_motor.setVelocity(speed_max)
-
-def turnRight():
-    left_motor.setVelocity(speed_max)
-    right_motor.setVelocity(-speed_max)
-
-def forward():
-    left_motor.setVelocity(speed_max)
-    right_motor.setVelocity(speed_max)
-
-def backward():
-    left_motor.setVelocity(-speed_max)
-    right_motor.setVelocity(-speed_max)
+    def init_device_variables(self):
+        # 8 E-puck distance sensors are named ranging from "ps0" to "ps7"
+        self.ps_sensor = []
+        for i in range(8):
+            ps = self.robot.getDevice(f"ps{i}")
+            ps.enable(self.time_step)
+            self.ps_sensor.append(ps)
+        # camera
+        self.camera = self.robot.getDevice('camera')
+        self.camera.enable(self.time_step)  
+        # use 4 LEDs named "led1", "led3", "led5" and "led7"
+        self.leds = []
+        for i in range(1,8,2):
+            self.leds.append(LED(f"led{i}"))
+        # motor
+        self.left_motor = self.robot.getDevice('left wheel motor')
+        self.right_motor = self.robot.getDevice('right wheel motor')
+        self.left_motor.setPosition(float('inf'))
+        self.right_motor.setPosition(float('inf'))
     
-def stop():
-    left_motor.setVelocity(0.0)
-    right_motor.setVelocity(0.0)
-def doAction():
-    print("doAction")
-def doLastAction():
-    print("doLastAction")
-##################################
-####    obstacle_avoidance     ###         
-##################################  
-def moveBack():
-    stop()
-    epuck = robot.getFromDef("epuck"+str(robot_id))
-    self_pos = epuck.getPosition() 
-    self_rot = epuck.getField("rotation").getSFRotation()
-    delta_y = center[group_id][0] - self_pos[1]
-    delta_x = center[group_id][1] - self_pos[0]
-    theta = math.atan(abs(delta_y / delta_x))
-    #print(robot_id)
-    #print(theta)
-    if delta_y >= 0 and delta_x >= 0:
-        theta = theta
-    elif delta_y >=0 and delta_x < 0:
-        theta = -theta+math.pi
-    elif delta_y < 0 and delta_x < 0:
-        theta = theta+math.pi
-    else:
-        theta = -theta
-    #print(theta)
-    self_rot[2] = 1.0
-    epuck.getField("rotation").setSFRotation([self_rot[0],self_rot[1],self_rot[2],theta])
-    
-def ObstacleAvoidance():
-    global last_front_obstacle
-    global last_right_obstacle
-    global last_left_obstacle
-    global action_time
-    global doAction
-    global doLastAction
-    global doMoveBack
-    image_array = camera.getImageArray()
-    in_river = image_process(image_array,"blue")
-    if robot_id in ranger_robots:
-        in_river = 0
-    ps_sensor_value = []
-    for i_ in range(sensor_num):
-        ps_sensor_value.append(ps_sensor[i_].getValue())
-    dis =100
-    right_obstacle=ps_sensor_value[2]>dis or ps_sensor_value[1]>dis or ps_sensor_value[0]>dis
-    left_obstacle=ps_sensor_value[5]>dis or ps_sensor_value[6]>dis or ps_sensor_value[7]>dis
-    front_obstacle=right_obstacle and left_obstacle
-    back_obstacle=ps_sensor_value[3]>dis or ps_sensor_value[4]>dis 
-    epuck = robot.getFromDef("epuck"+str(robot_id))
-    self_pos = epuck.getPosition()
-    escaped = 0
-    arrived = 1
-    doRandomMove = 0
-
-              
-    if robot_id in ranger_robots:
-        escaped = 0
-        arrived = 1
-    
-    if escaped:
-        print("id=%2d escaped" % robot_id)
-        print(self_pos)
-        if not doMoveBack:
-            print("id=%2d doMoveBack" % robot_id)
-            moveBack()
-            doMoveBack = 1
-    if not arrived and doMoveBack:
-        forward()
-    else:
-        if front_obstacle:
-            doAction = backward
-        elif right_obstacle:        
-            doAction = turnLeft 
-        elif left_obstacle:       
-            doAction = turnRight   
-        elif last_front_obstacle:
-            if random.choice([True, False]):
-                doAction = turnLeft 
-            else:
-                doAction = turnRight
-        elif doRandomMove:
-            doAction = randomMove
-        else:
-            doAction = forward
-        last_front_obstacle = front_obstacle      
-        if doLastAction == turnLeft or doLastAction==turnRight:
-            if action_time == 1:
-                action_time = action_time - 1
-                doAction = randomMove
-            if action_time > 0:
-                doAction = doLastAction
-                doAction()
-                action_time = action_time - 1
-            else:
-                action_time = 3
-    
-        elif doLastAction == backward or doLastAction == forward or doLastAction == randomMove:
-            doAction()
-        doLastAction = doAction        
-##################################
-####        RandomWalk        ####         
-##################################
-def RandomWalk():
-    global remainingTime
-    global direction
-    ObstacleAvoidance()
-    if remainingTime == 0:
-        if direction == 0:
-            p=random.uniform(0,1)
-            p=p*TURN
-            dir = random.uniform(-1,1)
-            if dir > 0:
-                direction = 1
-            else:
-                direction = 2
-            remainingTime = math.floor(p)
-        else:
-            remainingTime = math.ceil(numpy.random.exponential(LAMDA))
-            #print("remainingTime:"+str(remainingTime))
-            direction = 0
-    else:
-        remainingTime = remainingTime - 1
-
-##################################
-####        ImageProcess      ####         
-##################################     
-
-
-def detect_color(array):
-    if array[0] < 10 and array[1] < 20 and array[2] < 20:
-        return "black"
-    elif array[0] > 200 and array[1] > 200 and array[2] >200:
-        return "white"
-    elif abs(array[0]-197) < 10 and abs(array[1]-60) <20 and abs(array[2]-60)<20:
-        return "red"
-    elif abs(array[0]-0) < 20 and abs(array[1]-207) <20 and abs(array[2]-207)<20:
-        return "blue"
-    else:
-        return "undefined"
-
-def image_process(img_array,color):
-    black_num = 0
-    row = len(img_array)
-    colum = len(img_array[0])
-    half = row * colum / 2
-    for i in range(row):
-        for j in range(colum):
-            if detect_color(img_array[i][j]) == color:
-                black_num = black_num + 1
-        if black_num > half:
-            return 1
-    return 0
-    
-def DetectCell():
-    global black_count
-    global white_count
-    global object_pos_list
-    object_pos = ()
-    image_array = camera.getImageArray()
-    flag = image_process(image_array,"black")
-    if flag:
-        black_count = black_count + 1
-    else:
-        white_count = white_count + 1   
-
-def callback(data):
-    global current_color
-    try:
-        cv_bridge = CvBridge()
-        cv_image = cv_bridge.imgmsg_to_cv2(data, "rgb8")
-        resp = image_process(cv_image)
-        if resp:
-          print("black")
-          current_color = 1
-        else:
-          print("white")
-          current_color = 0
-    except CvBridgeError as e:
-        rospy.logerr('[tf-pose-estimation] Converting Image Error. ' + str(e))
-        return
-        
-def listener():
-    rospy.init_node('listener', anonymous=True)
-    rospy.Subscriber("camera", Image, callback)
-      
-##################################
-####        Explore           ####         
-##################################                        
-def Explore():
-    global opinion
-    global quality
-    global black_count
-    global white_count
-    global remainingExplorationTime
-    global STATE
-    global vote
-    global voteFlag
-    
-    DetectCell()
-        
-    if black_count < white_count:
-        opinion = 1    
-    else:
-        opinion = 2
-    quality = 1.0 * alpha * black_count / (black_count + white_count)
-    if robot_id in byzantine_robots:
-        if byzantine_style == '0':
-            quality = 0.0
-        elif byzantine_style == '1':
-            quality = 1.0
-        else:
-            quality = random.random()
-    vote = format(quality, '.6f')
-    if(remainingExplorationTime > 0):
-        remainingExplorationTime = remainingExplorationTime - 1
-    else:
-        voteFlag = True
-                
-        remainingExplorationTime = math.ceil(sigma)
-        exploreDurationTime = remainingExplorationTime
-        #重置reset
-        black_count = 0
-        white_count = 0
-        STATE = 2                #更改状态为2,Diffusing       
-        
-def Vote():
-    global black_count
-    global white_count
-    global quality
-    global neighbors
-    global vote
-    global vote_id
-    vote_id = vote_id + 1
-    msg="#[%s, %2d, %s, %6d]~" % (str(neighbors),robot_id,str(vote).rjust(18,' '),vote_id)
-    print("vote: %s lenth=%d" % (msg,len(msg)))
-    msg=msg.encode()
-    votes.append(vote)
-
-    print("id==%d, n=%d, votes=%s" % (robot_id,len(votes),str(votes)))
-    try:
-        s.send(msg)
-    except Exception as e:
-        msg=""
-        # print("Error:can't send data to server")
-        # print(e)
-        
-def Sync():
-    msg = "#[%s, %2d, %s, %6d]~" % (str(neighbors),robot_id,str(vote).rjust(18,' '),vote_id)
-    try:
-        # print("sync: "+msg)
-        msg=msg.encode()
-        s.send(msg)
-    except Exception as e:
-        msg =""
-        # print("Error:can't Sync")
-        # print(e)         
-        
-def Sync_stop_signal():
-    try:
-        msg="#[%s, %2d, %6d, %6d]~" % (str(neighbors),robot_id,-2,vote_id)
-        print("sync: "+msg)
-        msg=msg.encode()
-        s.send(msg)
-    except Exception as e:
-        msg =""
-        # print("Error:can't Sync")
-        # print(e)
- 
-##################################
-####        Diffusing         ####         
-##################################   
-def ConnectAndListen():
-    global neighbors
-    global consensusReached
-    global remainingsyncTime
-    global voteFlag
-    global STOPLOOP
-    remainingsyncTime=remainingsyncTime-1
-        
-    neighbors=getNeighbors()
-            
-    diffneighbors = updateNeighbors()
-
-    if voteFlag and not consensusReached and termination_time_ticks > 0:
-        Vote()
-        voteFlag = False
-    else:
-        # remainingsyncTime = math.ceil(20 / timeFactor)
-        remainingsyncTime=-1
-        if consensusReached:
-            Sync_stop_signal()
-        else:
-            Sync()
-
-
-def getDistance(pos1,pos2):
-    dist=(pos1[0]-pos2[0])**2+(pos1[1]-pos2[1])**2
-    return dist
-        
-def getNeighbors():
-    global isConnecting
-    pos_list = []
-    neighbor=[[0]*N for i in range(N)]
-    for i in range(N):
-        epuck=robot.getFromDef("epuck"+str(i))
-        pos=epuck.getPosition()
-        pos_list.append(pos[0:3]) 
-        for j in range(i):
-            dist=getDistance(pos_list[j],pos_list[i])
-            if dist < max(commRanges[i],commRanges[j]):
-                neighbor[j][i]=1
-                neighbor[i][j]=1
-    if neighbor[robot_id]:
-        isConnecting = True
-    else:
-        isConnecting = False              
-    return neighbor[robot_id]
-
-def updateNeighbors():
-    global oldNeighbors
-    newNeighbors = getNeighbors()
-    diffNeighbors = [1 if a ==1 and b==0 else 0 for a, b in zip(newNeighbors, oldNeighbors)]
-    oldNeighbors = newNeighbors
-    return diffNeighbors
-       
-def Diffusing():
-    global threadCurrentlyRunning
-    global STATE
-
-    STATE = 1                     #更改状态为1，Explore
-    if not threadCurrentlyRunning:     
-        threadCurrentlyRunning = True
+    def init_socket(self):
+        self.ip = "172.17.0.1"
+        self.port = 9955 + self.robot_id
         try:
-            thread.start_new_thread(WaitForDecision,("Thread-1",))           
+            socket.setdefaulttimeout(10)
+            self.s = socket.socket()
+            self.s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 96)
+            self.s.connect((self.ip, self.port))
         except Exception as e:
-            print("threading error")
+            print("connection failed")
             print(e)
-
-def WaitForDecision(threadName):
-    global threadCurrentlyRunning
-    global STOPLOOP
-    global consensusReached
-    try:
-        result = getResult()
-        if result != "":
-            if "end" != result:
-                print("id=%d,C:Response from Server:%s" %(robot_id,result))
-                resultList=eval(result) #
-                if resultList[0] == True and consensusReached == False:
-                    print("consensusReached is %s for robot %2d" % (str(resultList[0]),robot_id))
-                    f = open("/home/syc/all_result.txt", "a+")
-                    f.write(str(resultList[1:]))
-                    f.write('\n')
-                    f.close()
-                    f = open("/home/syc/tmp_result.txt", "a+")
-                    f.write('epuck' + str(robot_id) + '\n')
-                    f.close()
-                    consensusReached = True
-            else:
-                print("id=%d,C:end..."% robot_id)
-                f = open("/home/syc/tmp_result.txt", "a+")
-                f.write('epuck' + str(robot_id) + '\n')
-                f.close()     
-                STOPLOOP = True     
-    except Exception as e:
-        traceback.print_exc()
-    threadCurrentlyRunning = False
-
-def getResult():
-    global res
-    try:
-        res = s.recv(1024,0x40).decode()
-        res = res.split("#")[1].strip("~")
-    except Exception as e:
-        res = ""
-    finally:
-        return res
-
-##################################
-####       Main Process       ####         
-##################################    
-if __name__ == '__main__':      
-    f = open("/home/syc/commRange.txt","r")
-    commRangetxt = int(f.readline())
-    commRange = commRangetxt * commRangetxt / 100
-    f.close() 
-    commRanges =[1 if _ in ranger_robots else 0.25 for _ in range(N)] 
-    speed_max = 5
-    if robot_id in ranger_robots: 
-        speed_max = 7.5
-   
-    commRange = commRanges[robot_id]
-
-    #global variable
-    black_count=0
-    white_count=0
-    object_pos_list=[]
-    vote =()
-    vote_id = 0
-    opinion=0
-    quality=random.random()
-    direction = 0
-    # remainingsyncTime = math.ceil(20 / timeFactor)
-    remainingsyncTime=-1
-    remainingTime = math.ceil(numpy.random.exponential(LAMDA))
-    remainingExplorationTime = math.ceil(sigma)
-    votes =[]
-    STATE = 1
-    threadCurrentlyRunning = False 
-    res = ""      
-    STOPLOOP = False
-    voteFlag = False
-    syncFlag = False
-    consensusReached = False
-    isConnecting = False 
-    neighbors = [0]*N
-    oldNeighbors = [0]*N
-    current_color=0
-    last_front_obstacle = 0
-    last_right_obstacle = 0
-    last_left_obstacle = 0
-    action_time = 0
-    doMoveBack = 0
-    # 关联并使能传感器设备
-    ps_sensor = []
-    for i_ in range(sensor_num):
-        ps_sensor.append(robot.getDevice(ps_sensor_name[i_]))
-        ps_sensor[i_].enable(timestep)  
-    # 关联camera
-    camera_time_step = timestep
-    camera = robot.getDevice('camera')
-    camera.enable(camera_time_step)  
-    #关联LED
-    led_name=['led1','led3','led5','led7']
-    led_num=4
-    led=[]
-    for i_ in range(led_num):
-        led.append(LED(led_name[i_]))     
-    # 关联电机设备
-    left_motor = robot.getDevice('left wheel motor')
-    right_motor = robot.getDevice('right wheel motor')
-    # 设置电机运行模式
-    left_motor.setPosition(float('inf'))
-    right_motor.setPosition(float('inf'))
-    #连接服务端
-    IP = "172.17.0.1"
-    PORT=9955+robot_id
-    try:
-        socket.setdefaulttimeout(10)
-        s = socket.socket()
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 96)
-        s.connect((IP, PORT))   
-    except Exception as e:
-        print("connection failed")
-        print(e) 
-        supvisornode = robot.getFromDef("epuck%s"%robot_id)
-        supvisornode.restartController()  
-    else:
-        print("connection success")     
-    finally:   
-        ##################################
-        ####        MainLoop          ####         
-        ##################################       
-        step = 0
-        while robot.step(timestep) != -1:
-            try:
-                step = step + 1
-                termination_time_ticks = termination_time_ticks -1
-                if step > sigma+1:
-                    ConnectAndListen() #get neighbors and sync
-                
-                TurnLeds()         #Turn Leds On
-                
-                Move()
+            supvisornode = self.robot.getFromDef(f"epuck{self.robot_id}")
+            supvisornode.restartController()
+        else:
+            print("connection success")
+        
+    # state
+    def get_states(self):
+        """get image_array, ps_sensor_value, position, neighbors, neighbors_dist"""
+        self.image_array = self.camera.getImageArray()
+        
+        self.ps_sensor_value = [ps.getValue() for ps in self.ps_sensor]
+        
+        pos_list = []
+        for i in range(self.num_robots):
+            epuck = self.robot.getFromDef(f"epuck{i}")
+            pos = epuck.getPosition()
+            if i == self.robot_id:
+                self.pos = pos
+            pos_list.append(pos[:2])
+        
+        for i, (x, y) in enumerate(pos_list):
+            if i != self.robot_id:
+                dist = (x - self.pos[0])**2 + (y - self.pos[1])**2
+                self.neighbors_dist[i] = dist
+                self.neighbors[i] = 1 if dist < max(
+                    self.comm_range, self.comm_ranges[i]
+                ) else 0
     
-                       
-                if STATE == 1:  
-                    Explore()      #explore and estimate 
-                elif STATE == 2:
-                    Diffusing()    #vote
+    # action
+    def obstacle_avoidance(self):
+        right_obstacle = any(
+            value > self.dist_threshold for value in self.ps_sensor_value[:3])
+        left_obstacle = any(
+            value > self.dist_threshold for value in self.ps_sensor_value[-3:])
+        front_obstacle = right_obstacle and left_obstacle
+        
+        if front_obstacle:
+            action = "backward"
+        elif right_obstacle:
+            action = "turn_left"
+        elif left_obstacle:
+            action = "turn_right"
+        elif self.last_front_obstacle:
+            action = random.choice(["turn_left", "turn_right"])
+        else:
+            action = "forward"
+        
+        if self.last_action in ["turn_left", "turn_right"]:
+            if self.turn_time > 0:
+                action = self.last_action
+                self.turn_time -= 1
+            else:
+                self.turn_time = random.randint(1, 3)
+        
+        # if action == "random_move":
+        #     l = random.uniform(-1, 1)
+        #     r = random.uniform(-1, 1)
+        #     self.walk_with_speed([l * self.speed_max, r * self.speed_max])
+        # else:
+        #     self.walk_with_speed(self.actions[action])
+        self.walk_with_speed(self.actions[action])
+        self.last_front_obstacle = deepcopy(front_obstacle)
+        self.last_action = deepcopy(action)
+
+    def walk_with_speed(self, speed_list: list):
+        assert len(speed_list) == 2, "speed_list should have 2 elements"
+        l_speed, r_speed = speed_list
+        self.left_motor.setVelocity(l_speed)
+        self.right_motor.setVelocity(r_speed)
+
+    # main loop
+    def run(self):
+        while self.robot.step(self.time_step) != -1:
+            try:
+                self.step += 1
+                self.termination_time_ticks -= 1
+                self.get_states()
+                if self.step > self.sigma + 1:
+                    self.connect_and_listen()  # get neighbors and sync
+                
+                self.turn_leds_on()
+
+                self.walk_with_speed(self.actions["forward"])
+                                       
+                if self.phase == "explore":
+                    self.detect_cell()
+                    self.explore()  # explore and estimate the ratio
+                elif self.phase == "diffuse":
+                    self.diffusing() # vote
             
-                RandomWalk()
-           
-                if STOPLOOP:
-                    stop()
+                self.obstacle_avoidance()
+
+                if self.stop_loop:
+                    self.walk_with_speed(self.actions["stop"])
                     break
             except Exception as e:
                 print(traceback.print_exc())
                       
-        s.close()
-        total_steps = step
-        total_seconds = timestep * total_steps / 1000.0
-        print("total time is " + str(total_seconds) + "seconds") 
+        self.s.close()
+        total_seconds = self.time_step * self.step / 1000.0
+        print("total time is " + str(total_seconds) + "seconds")
+    
+    def turn_leds_on(self):
+        if self.opinion == "white":
+            self.leds[1].set(0x00ff00)  # green for white
+        elif self.opinion == "black":
+            self.leds[1].set(0x0000ff)  # blue for black
+        else:
+            pass
+
+    def explore(self):
+        self.opinion = "black" if self.black_count > self.white_count else "white"
+        if self.robot_id in self.byz_robots:
+            if self.byz_style == 0:
+                self.quality = 0
+            elif self.byz_style == 1:
+                self.quality = 1
+            else:
+                self.quality = random.random()
+        else:
+            self.quality = self.black_count / (self.black_count + self.white_count)
+        
+        self.vote = format(self.quality, '.6f')
+        if self.remaining_exploration_time > 0:
+            self.remaining_exploration_time -= 1
+        else:
+            self.vote_flag = True
+            self.remaining_exploration_time = math.ceil(self.sigma)
+            self.black_count, self.white_count = 0, 0
+            self.phase = "diffuse"
+
+    # image process
+    def detect_cell(self):
+        flag = self.image_process(self.image_array, "black")
+        if flag:
+            self.black_count += 1
+        else:
+            self.white_count += 1
+    
+    @classmethod
+    def image_process(cls, img_array, target_color) -> bool:
+        black_num = 0
+        row = len(img_array)
+        colum = len(img_array[0])
+        half = row * colum / 2
+        for i in range(row):
+            for j in range(colum):
+                if cls.detect_color(img_array[i][j]) == target_color:
+                    black_num = black_num + 1
+            if black_num > half:
+                return True
+        return False
+    
+    @staticmethod
+    def detect_color(pixel):
+        color_thresholds = {
+            "black": ([0, 0, 0], [10, 20, 20]),
+            "white": ([200, 200, 200], [255, 255, 255]),
+            # "red": ([187, 40, 40], [207, 80, 80]),
+            # "blue": ([0, 187, 187], [20, 227, 227])
+        }
+        for color_name, thresholds in color_thresholds.items():
+            min_threshold, max_threshold = thresholds
+            if all(min_t <= p <= max_t for p, min_t, max_t in zip(
+                pixel, min_threshold, max_threshold
+            )):
+                return color_name
+        return "undefined"
+
+    # Diffusing
+    def diffusing(self):
+        self.phase = "explore"
+        if not self.thread_currently_running:
+            self.thread_currently_running = True
+            try:
+                thread = threading.Thread(
+                    target=self.wait_for_decision,
+                    args=(f"Thread-{self.robot_id}",))
+                thread.start()
+            except Exception as e:
+                print("threading error")
+                print(e)
+    
+    def wait_for_decision(self, thread_name):
+        try:
+            result = self.get_result()
+            if result != "":
+                if result != "end":
+                    print(f"id={self.robot_id},C:Response from Server:{result}")
+                    resultList = eval(result)
+                    if resultList[0] == True and self.consensus_reached == False:
+                        print("consensusReached is {} for robot {:2d}".format(
+                            resultList[0], self.robot_id))
+                        
+                        with open(
+                            os.path.join(self.save_path, "all_result.txt"), "a+"
+                        ) as f:
+                            f.write(str(resultList[1:]))
+                            f.write('\n')
+                        
+                        with open(
+                            os.path.join(self.save_path, "tmp_result.txt"), "a+"
+                        ) as f:
+                            f.write(f"epuck{self.robot_id}\n")
+                        self.consensus_reached = True
+                else:
+                    print(f"id={self.robot_id},C:end...")
+                    with open(
+                        os.path.join(self.save_path, "tmp_result.txt"), "a+"
+                    ) as f:
+                        f.write(f"epuck{self.robot_id}\n")
+                    self.stop_loop = True
+        except Exception as e:
+            print("error in wait for decision: ", e)
+            traceback.print_exc()
+        self.thread_currently_running = False
+
+    def get_result(self):
+        try:
+            res = self.s.recv(1024,0x40).decode()
+            res = res.split("#")[1].strip("~")
+        except Exception as e:
+            res = ""
+        return res
+
+    def connect_and_listen(self):
+        self.remaining_sync_time -= 1
+        if (self.vote_flag and not self.consensus_reached 
+            and self.termination_time_ticks > 0):
+            # vote
+            msg = "#[{}, {:2d}, {:>18}, {:6d}]~".format(
+                self.neighbors, self.robot_id, self.vote, self.vote_round)
+            print("vote: {}, length = {}".format(msg, len(msg)))
+            self.votes.append(self.vote)
+            print("id = {}, votes_length = {}, votes[:-10] = {}".format(
+                self.robot_id, len(self.votes), self.votes[-10:]))
+            self.vote_round += 1
+            self.vote_flag = False
+        else:
+            self.remaining_sync_time = -1
+            if self.consensus_reached:
+                # sync stop signal
+                msg = "#[{}, {:2d}, {:6d}, {:6d}]~".format(
+                    self.neighbors, self.robot_id, -2, self.vote_round
+                )
+                print("sync: " + msg)
+            else:
+                # sync
+                msg = "#[{}, {:2d}, {:>18}, {:6d}]~".format(
+                    self.neighbors, self.robot_id, self.vote, self.vote_round
+                )
+        try:
+            msg = msg.encode()
+            self.s.send(msg)
+        except Exception as e:
+            print("error in connect_and_listen: ", e)
+            traceback.print_exc()
+
+
+if __name__ == '__main__':
+    save_path = os.path.join(current_dir, "..", "..", "results")
+    with open(os.path.join(exp_path, "config.yaml"), "r") as f:
+        config = yaml.safe_load(f)
+    my_controller = RobotController(config, save_path)
+    my_controller.run()
