@@ -71,7 +71,6 @@ class RobotController:
         self.step = 0  # simulation steps
         # self.time_step = int(robot.getBasicTimeStep())  #  32 ms
         self.time_factor = self.time_step / 100.0
-        self.turn = 45 / self.time_factor  # don't konw why it is named
         self._lambda = 100 / self.time_factor
         self.sigma = 30 / self.time_factor
         self.termination_time_ticks = 4000
