@@ -72,14 +72,9 @@ class RobotController:
         # self.time_step = int(robot.getBasicTimeStep())  #  32 ms
         self.time_factor = self.time_step / 100.0
         self.turn = 45 / self.time_factor  # don't konw why it is named
-        self._lambda = 100 / self.time_factor
         self.sigma = 30 / self.time_factor
         self.termination_time_ticks = 4000
-        # remaining_sync_time = math.ceil(20 / time_factor)
-        self.remaining_sync_time = -1
-        self.remaining_time = math.ceil(np.random.exponential(self._lambda))
         self.remaining_exploration_time = math.ceil(self.sigma)
-        self.action_time = 0
 
     def init_env_variables(self):
         # variables related to environment
@@ -97,7 +92,6 @@ class RobotController:
         self.res = ""
         self.stop_loop = False
         self.vote_flag = False
-        self.sync_flag = False
         self.consensus_reached = False
         self.neighbors = [0] * self.num_robots
         self.neighbors_dist = [0] * self.num_robots
@@ -360,7 +354,6 @@ class RobotController:
         return res
 
     def connect_and_listen(self):
-        self.remaining_sync_time -= 1
         if (self.vote_flag and not self.consensus_reached 
             and self.termination_time_ticks > 0):
             # vote
@@ -373,7 +366,6 @@ class RobotController:
             self.vote_round += 1
             self.vote_flag = False
         else:
-            self.remaining_sync_time = -1
             if self.consensus_reached:
                 # sync stop signal
                 msg = "#[{}, {:2d}, {:6d}, {:6d}]~".format(
