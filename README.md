@@ -43,3 +43,7 @@ Replace all paths in the form of '/home/<>/<>.txt' with the paths on your own co
 All txt files with names that appear in the code can be created as empty files or have 0 filled in on the first line.
 ## Demo Video
 https://pan.baidu.com/s/1mtrY0Fwr6RJt6HVxyEfKdA?pwd=s6s5#list/path=%2F
+
+## swarm_behavior use
+git clone swarm_behavior and interfaces package
+then, apt install ros2_webots package
