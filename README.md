@@ -38,6 +38,6 @@ Replace all paths in the form of '/home/<>/<>.txt' with the paths on your own co
 
 All txt files with names that appear in the code can be created as empty files or have 0 filled in on the first line.
 
-## Acknoledgements
+## Acknowledgements
 
 Part of this repository is original from the hashgraph-based framework. The corresponding paper is [here](https://link.springer.com/article/10.1007/s10846-022-01759-1). The source code is [here](https://github.com/LuoJie996/swarm-hashgraph). Demo Video is [here](https://pan.baidu.com/s/1mtrY0Fwr6RJt6HVxyEfKdA?pwd=s6s5#list/path=%2F).
