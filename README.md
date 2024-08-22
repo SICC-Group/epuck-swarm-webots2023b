@@ -1,4 +1,3 @@
-**migrate swarm-hashgraph to webots2023b**
 
 # swarm-epucks
 This repository contains typical environments and demo codes for epucks swarm simulation.
