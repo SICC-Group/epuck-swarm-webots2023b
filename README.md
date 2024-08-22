@@ -40,6 +40,4 @@ All txt files with names that appear in the code can be created as empty files o
 
 ## Acknoledgements
 
-Part of this repository is referred to the hashgraph-based framework, whose corresponding article: A Fast and Robust Solution for Common Knowledge Formation in Decentralized Swarm Robots(https://link.springer.com/article/10.1007/s10846-022-01759-1). The source code address of this repository: https://github.com/LuoJie996/swarm-hashgraph
-
-Demo Video: https://pan.baidu.com/s/1mtrY0Fwr6RJt6HVxyEfKdA?pwd=s6s5#list/path=%2F
+Part of this repository is original from the hashgraph-based framework. The corresponding paper is [here](https://link.springer.com/article/10.1007/s10846-022-01759-1). The source code is [here](https://github.com/LuoJie996/swarm-hashgraph). Demo Video is [here](https://pan.baidu.com/s/1mtrY0Fwr6RJt6HVxyEfKdA?pwd=s6s5#list/path=%2F).
