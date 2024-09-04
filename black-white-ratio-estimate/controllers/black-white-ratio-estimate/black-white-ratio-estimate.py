@@ -11,21 +11,23 @@ from copy import deepcopy
 from controller import LED, Supervisor
 import numpy as np
 
-current_dir = os.path.dirname(__file__)
+current_dir = os.path.dirname(os.path.abspath(__file__))
 exp_path = os.path.join(current_dir, "..", "..")
-# sys.path.append(exp_path)
+sys.path.append(exp_path)
+from config import parser
 # from torch_models import *
 
 
 class RobotController:
-    def __init__(self, config, save_path) -> None:
+    def __init__(self, args, save_path) -> None:
+        self.args = args
         self.save_path = save_path
         self.robot = Supervisor()
         self.robot_id = int(self.robot.getCustomData())
-        self.num_robots = config["numRobots"]
-        self.ranger_robots = list(range(config["commRanger"]))
+        self.num_robots = self.args.num_robots
+        self.ranger_robots = list(range(self.args.ranger_robots))
         self.comm_ranges = [
-            config["range1"] if id in self.ranger_robots else config["range0"]
+            self.args.range1 if id in self.ranger_robots else self.args.range0
             for id in range(self.num_robots)]
         self.comm_range = self.comm_ranges[self.robot_id]
         self.speed_max = 7.5 if self.robot_id in self.ranger_robots else 5
@@ -46,11 +48,11 @@ class RobotController:
         self.position = []  # x, y, z
 
         # self.byz_robots = random.sample(
-        #     list(range(self.num_robots)), config["byzNum"])
+        #     list(range(self.num_robots)), self.args.byz_num)
         self.byz_robots = [0, 1]
-        self.byz_style = config["byzStyle"]
+        self.byz_style = self.args.byz_style
 
-        self.group_number = config["groupNumber"]
+        self.group_number = self.args.group_number
         self.groups = {i: [] for i in range(self.group_number)}
         for i in range(self.num_robots):
             self.groups[i % self.group_number].append(i)
@@ -61,7 +63,7 @@ class RobotController:
         print(f"ranger_robots: {self.ranger_robots}")
         print(f"byzantine_robots: {self.byz_robots}")
         
-        self.time_step = config["timeStep"]  # in ms
+        self.time_step = self.args.time_step  # in ms
         self.init_time_variables()
         self.init_env_variables()
         self.init_device_variables()
@@ -386,7 +388,6 @@ class RobotController:
 
 if __name__ == '__main__':
     save_path = os.path.join(current_dir, "..", "..", "results")
-    with open(os.path.join(exp_path, "config.yaml"), "r") as f:
-        config = yaml.safe_load(f)
-    my_controller = RobotController(config, save_path)
+    args, unknown = parser.parse_known_args()
+    my_controller = RobotController(args, save_path)
     my_controller.run()
