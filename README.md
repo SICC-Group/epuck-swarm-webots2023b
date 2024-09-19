@@ -3,7 +3,7 @@
 This repository contains typical environments and demo codes for epucks swarm simulation.
 
 ## Requirements
-Ubuntu18.04, Webots 2023b, python 3.8
+Ubuntu 20.04, Webots 2023b, python 3.8
 
 Requirements of py-swirld installation refers to https://github.com/Lapin0t/py-swirld
 ```
