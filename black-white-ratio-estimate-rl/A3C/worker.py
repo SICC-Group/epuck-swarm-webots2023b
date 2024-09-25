@@ -14,6 +14,9 @@ import rospy
 from std_msgs.msg import String
 
 from model import Model
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
+
 
 class Worker:
     def __init__(self, args):
@@ -30,12 +33,14 @@ class Worker:
         # self.as_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # self.as_client.connect(("172.18.0.1", 9801))
         
-        self.model = Model(11, 4)
+        self.model = Model(13, 4, self.args.col, self.args.row, device)
+        self.model = self.model.to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
-        self.buffer_s = deque()  # avail info in [:-1]
-        self.buffer_a = deque()  # avail info in [1:]
-        self.buffer_r = deque()  # avail info in [:-1]
-        self.buffer_info = deque()
+        self.buffer_s = []  # avail info in [:-1]
+        self.buffer_map = []  # avail info in [:-1]
+        self.buffer_a = []  # avail info in [1:]
+        self.buffer_r = []  # avail info in [:-1]
+        self.buffer_info = []
         self.done = False
         self.eval_sync = False
         self.save_dir = None
@@ -49,6 +54,7 @@ class Worker:
             if self.save_dir is None:
                 self.save_dir = agent_data['save_dir']
             if agent_data['phase'] == 'eval':
+                # sync with the global model
                 if not self.eval_sync:
                     msg = {
                         "id": self.id,
@@ -60,32 +66,17 @@ class Worker:
                         model_info = self.get_message(client)
                     self.model.load_serializable_state_list(model_info["parameters"])
                     print(f"sync with the global model in eval phase - version {model_info['version']}")
-                    print(f"len of the buffer_s: {len(self.buffer_s)}")
+                    # print(f"len of the buffer_s: {len(self.buffer_s)}")
                     self.eval_sync = True
                     if self.id == 0:
                         torch.save(self.model, self.save_dir + f'/version_{model_info["version"]}.pt')
-                with torch.no_grad():
-                    action = self.model.choose_action(
-                        torch.tensor(agent_data['state'], dtype=torch.float32)
-                    )
-                message = json.dumps(action)
-                # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
-                self.publisher.publish(message)
-            
-            elif agent_data['phase'] == 'train':
-                self.eval_sync = False
-                if agent_data['done']:
-                    self.buffer_s.append(agent_data['state'])
-                    self.buffer_r.append(agent_data['reward'])
-                    self.buffer_info.append(agent_data['info'])
-                    self.buffer_a.append(None)
-                    self.done = agent_data['done']
-                    return
                 
+                # choose action for avoiding obstacles
                 if agent_data['info'] == 'none':
                     with torch.no_grad():
                         action = self.model.choose_action(
-                            torch.tensor(agent_data['state'], dtype=torch.float32)
+                            torch.tensor(agent_data['state'], dtype=torch.float, device=device),
+                            torch.tensor(agent_data['map'], dtype=torch.float, device=device)
                         )
                 elif agent_data['info'] == "front":
                     action = 3  # backward - 5,3
@@ -95,9 +86,43 @@ class Worker:
                     action = 2  # turn right - 4,2
                 elif agent_data['info'] == "back":
                     action = 0
+                message = json.dumps(action)
+                # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
+                self.publisher.publish(message)
+            
+            elif agent_data['phase'] == 'train':
+                self.eval_sync = False
+                if agent_data['done']:
+                    self.buffer_s.append(agent_data['state'])
+                    self.buffer_map.append(agent_data['map'])
+                    self.buffer_r.append(agent_data['reward'])
+                    self.buffer_info.append(agent_data['info'])
+                    self.buffer_a.append(None)
+                    self.done = agent_data['done']
+                    return
+                
+                with torch.no_grad():
+                    action = self.model.choose_action(
+                        torch.tensor(agent_data['state'], dtype=torch.float, device=device),
+                        torch.tensor(agent_data['map'], dtype=torch.float, device=device)
+                    )
+                # if agent_data['info'] == 'none':
+                #     with torch.no_grad():
+                #         action = self.model.choose_action(
+                #             torch.tensor(agent_data['state'], dtype=torch.float32)
+                #         )
+                # elif agent_data['info'] == "front":
+                #     action = 3  # backward - 5,3
+                # elif agent_data['info'] == "right":
+                #     action = 1  # turn left - 3,2
+                # elif agent_data['info'] == "left":
+                #     action = 2  # turn right - 4,2
+                # elif agent_data['info'] == "back":
+                #     action = 0
                 
                 self.buffer_a.append(action)  # action type, should be `int`
                 self.buffer_s.append(agent_data['state'])
+                self.buffer_map.append(agent_data['map'])
                 self.buffer_r.append(agent_data['reward'])
                 self.buffer_info.append(agent_data['info'])
                 message = json.dumps(action)
@@ -164,26 +189,31 @@ class Worker:
         try:
             # 获取来自webots-supervisor的数据
             while not rospy.is_shutdown():
-                if self.done or all([
-                    len(self.buffer_s) > self.args.buffer_length + 1,
-                    len(self.buffer_a) > self.args.buffer_length + 1,
-                    len(self.buffer_r) > self.args.buffer_length + 1
-                ]):
+                if self.done:
                     print("done info: ", self.done)
-                    # collect the buffer data
-                    buffer_s = list(islice(self.buffer_s, self.args.buffer_length))
-                    buffer_a = list(islice(self.buffer_a, self.args.buffer_length))
-                    buffer_r = list(islice(self.buffer_r, self.args.buffer_length))
-                    # update the buffer data
-                    self.buffer_s = deque(islice(self.buffer_s, self.args.buffer_length, None))
-                    self.buffer_a = deque(islice(self.buffer_a, self.args.buffer_length, None))
-                    self.buffer_r = deque(islice(self.buffer_r, self.args.buffer_length, None))
+                    # # collect the buffer data
+                    # buffer_s = list(islice(self.buffer_s, self.args.buffer_length))
+                    # buffer_a = list(islice(self.buffer_a, self.args.buffer_length))
+                    # buffer_r = list(islice(self.buffer_r, self.args.buffer_length))
+                    # # update the buffer data
+                    # self.buffer_s = deque(islice(self.buffer_s, self.args.buffer_length, None))
+                    # self.buffer_a = deque(islice(self.buffer_a, self.args.buffer_length, None))
+                    # self.buffer_r = deque(islice(self.buffer_r, self.args.buffer_length, None))
                     # train
                     grad = self.model.train_and_get_grad(
-                        buffer_s[:-1], buffer_a[:-1], buffer_r[1:], self.done,
-                        buffer_s[-1], self.args.gamma, self.optimizer
+                        self.buffer_s[self.args.exclude_steps:-1],
+                        self.buffer_map[self.args.exclude_steps:-1],
+                        self.buffer_a[self.args.exclude_steps:-1], 
+                        self.buffer_r[self.args.exclude_steps + 1:],
+                        self.done, self.buffer_s[-1], self.buffer_map[-1],
+                        self.args.gamma, self.optimizer
                     )
                     self.done = False
+                    self.buffer_s = []
+                    self.buffer_map = []
+                    self.buffer_a = []
+                    self.buffer_r = []
+                    self.buffer_info = []
                     msg = {
                         "id": self.id,
                         "info": {

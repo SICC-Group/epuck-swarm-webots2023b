@@ -21,8 +21,6 @@ class BaseRunner(object):
         self.env_name = self.args.env_name
         self.max_steps = self.args.max_steps
         self.episode_length = self.args.episode_length
-        # self.buffer_length = self.args.buffer_length
-        # self.episode_t_max = self.args.episode_t_max
         self.use_wandb = self.args.use_wandb
         self.use_eval = self.args.use_eval
         self.eval_interval = self.args.eval_interval

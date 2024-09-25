@@ -78,7 +78,7 @@ def main(args_):
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
 
-    env = Epuck2Supervisor(args, save_path, col=20, row=20)
+    env = Epuck2Supervisor(args, save_path, col=args.col, row=args.row)
     num_agents = args.num_agents
                
     config = {"args": args,
@@ -97,10 +97,11 @@ def main(args_):
     columns = ['step']
     for i in range(num_agents):
         columns.append(f'episode_reward_{i}')
-    for i in range(num_agents):
-        columns.append(f'ratio_estimate_{i}')
-    columns.append('ratio_mean')
-    columns.append('ratio_std')
+    columns.append('episode_time')
+    columns.append(f'ratio_estimation')
+    columns.append(f'exploration_rate')
+    for i in range(4):
+        columns.append(f'action_{i}')
     
     progress_filename = os.path.join(run_dir,'progress.csv')
     df = pd.DataFrame(columns=columns)
@@ -110,13 +111,13 @@ def main(args_):
     df = pd.DataFrame(columns=columns)
     df.to_csv(progress_filename,index=False)
     
-    progress_filename_train = os.path.join(run_dir,'progress_train.csv')
-    df = pd.DataFrame(columns=['step','loss','Q_tot','grad_norm']) 
-    df.to_csv(progress_filename_train,index=False)
+    # progress_filename_train = os.path.join(run_dir,'progress_train.csv')
+    # df = pd.DataFrame(columns=['step','loss','Q_tot','grad_norm']) 
+    # df.to_csv(progress_filename_train,index=False)
     
-    progress_filename_train = os.path.join(run_dir,'progress_train_adj.csv')
-    df = pd.DataFrame(columns=['step','advantage','clamp_ratio','rl_loss','entropy_loss','grad_norm']) 
-    df.to_csv(progress_filename_train,index=False)
+    # progress_filename_train = os.path.join(run_dir,'progress_train_adj.csv')
+    # df = pd.DataFrame(columns=['step','advantage','clamp_ratio','rl_loss','entropy_loss','grad_norm']) 
+    # df.to_csv(progress_filename_train,index=False)
 
     try:
         while total_train_steps < args.max_steps:
