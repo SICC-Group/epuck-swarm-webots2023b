@@ -37,7 +37,7 @@ class Env:
         x = x + 0.04 * math.cos(angle)
         y = y + 0.04 * math.sin(angle)
         for idx, (tile_x, tile_y) in enumerate(self.tiles):
-            if tile_x - 0.03 < x < tile_x + 0.03 and tile_y - 0.03 < y < tile_y + 0.03:
+            if tile_x - 0.035 < x < tile_x + 0.035 and tile_y - 0.035 < y < tile_y + 0.035:
                 if not self.tiles_visited[idx]:
                     self.tiles_visited[idx] = True
                     return True, idx
@@ -210,14 +210,6 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         rgblist = ['{:08b}'.format(i + 1) 
                    if i in self.ranger_robots else None for i in self.swarm]
         for i in range(self.num_agents):
-            # emitter_string = """
-            #     Emitter {
-            #         name "emitter0%d"
-            #         channel %d
-            #     }""" % (i, i + 3)
-            # supervisor_node = self.getFromDef("EnvSet_supervisor")
-            # children_field = supervisor_node.getField("children")
-            # children_field.importMFNodeFromString(-1, emitter_string)
             print(f"import robot {i:2d}")
             if rgblist[i] is None:
                 line_string = """
@@ -276,15 +268,15 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             chFd = root.getField("children")
             chFd.importMFNodeFromString(-1,line_string)
         
+        # start the controller
+        super(Supervisor, self).step(self.time_step // self.f_ratio)
         print("========== import robots successfully ==========")
 
     def step(self, action):
-        for _ in range(self.f_ratio):
-            if super(
-                Supervisor, self
-            ).step(self.time_step // self.f_ratio) == -1:
-                exit()
         self.handle_emitter(action)
+        for _ in range(self.f_ratio):
+            if super(Supervisor, self).step(self.time_step // self.f_ratio) == -1:
+                exit()
         msg = self.handle_receiver() # gs_values[1] and ps sensor values
         self.steps += 1
         self.gs_values_1 = msg[:, 0]  # shape of (num_agents,)
@@ -302,18 +294,18 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         if self.start_exploration:
             is_new_tiles = self.update_env(epuck_pos, rotation_angle)
         
-        is_new_tiles_np = np.expand_dims(is_new_tiles, axis=-1).astype(np.float32)
-        exploration_ratio = np.expand_dims([sum(self.env_tiles.tiles_visited)/(self.row * self.col)] * self.num_agents, axis=-1)
-        ps_values_normalized = (ps_sensor_values - 55) / (max(np.max(ps_sensor_values), 450) - 55)
+        # is_new_tiles_np = np.expand_dims(is_new_tiles, axis=-1).astype(np.float32)
+        # exploration_ratio = np.expand_dims([sum(self.env_tiles.tiles_visited)/(self.row * self.col)] * self.num_agents, axis=-1)
+        # ps_values_normalized = (ps_sensor_values - 55) / (max(np.max(ps_sensor_values), 450) - 55)
         self.all_states = np.concatenate(
-            [is_new_tiles_np, exploration_ratio, epuck_pos, rotation_angle, ps_values_normalized], axis=1
+            [epuck_pos, rotation_angle, ps_sensor_values], axis=1
         )
         return (
             self.all_states,  # [num_agents x num_states], np.array
             self.get_map_info(),  # [col, row], np.array
             self.get_reward(epuck_pos, is_new_tiles, action),  # [num_agents,], np.array
             self.is_done(),  # [num_agents,], list
-            self.get_info(ps_sensor_values)  # [num_agents,]
+            self.get_info()  # [num_agents,]
         )
        
     def handle_receiver(self):
@@ -357,36 +349,34 @@ class Epuck2Supervisor(CSVSupervisorEnv):
     
     def is_done(self):
         # super().is_done()
-        if self.env_tiles.tiles_visited.count(True) == self.col * self.row:
-            return [True] * self.num_agents
-        if self.steps - 1 == self.args.episode_length:
+        if self.env_tiles.tiles_visited.count(True) == int(0.9 * self.col * self.row):
             return [True] * self.num_agents
         else:
             return [False] * self.num_agents
     
-    def get_info(self, values):
+    def get_info(self):
         # super().get_info()
-        obstacles = []
-        for i in range(self.num_agents):
-            right_obstacle = any(
-                value > self.ps_threshold for value in values[i][:3])
-            left_obstacle = any(
-                value > self.ps_threshold for value in values[i][-3:])
-            front_obstacle = right_obstacle and left_obstacle
-            back_obstacle = any(
-                value > self.ps_threshold for value in values[i][3:-3]
-            )
-            if front_obstacle:
-                obstacles.append("front")
-            elif right_obstacle:
-                obstacles.append("right")
-            elif left_obstacle:
-                obstacles.append("left")
-            elif back_obstacle:
-                obstacles.append("back")
-            else:
-                obstacles.append("none")
-        return obstacles
+        # obstacles = []
+        # for i in range(self.num_agents):
+        #     right_obstacle = any(
+        #         value > self.ps_threshold for value in values[i][:3])
+        #     left_obstacle = any(
+        #         value > self.ps_threshold for value in values[i][-3:])
+        #     front_obstacle = right_obstacle and left_obstacle
+        #     back_obstacle = any(
+        #         value > self.ps_threshold for value in values[i][3:-3]
+        #     )
+        #     if front_obstacle:
+        #         obstacles.append("front")
+        #     elif right_obstacle:
+        #         obstacles.append("right")
+        #     elif left_obstacle:
+        #         obstacles.append("left")
+        #     elif back_obstacle:
+        #         obstacles.append("back")
+        #     else:
+        #         obstacles.append("none")
+        return None
     
     def reset_visited(self):
         self.start_exploration = True
@@ -426,27 +416,26 @@ class Epuck2Supervisor(CSVSupervisorEnv):
     
     def reset(self):
         self.steps = 0
-        #self.simulationReset()
+        # self.simulationReset()
+        # for robot in self.robots:
+        #     robot.restartController()
         self.simulationResetPhysics()
         self.start_time = super(Supervisor, self).getTime()
-        for robot in self.robots:
-            robot.restartController()
-        super(Supervisor, self).step(self.time_step//self.f_ratio)
-
         self.reset_state()
-        for _ in range(self.f_ratio-1):
+        self.reset_visited()
+        for _ in range(self.f_ratio):
             super(Supervisor, self).step(self.time_step//self.f_ratio)
-        
-        # test = self.handle_receiver()
-
-        # now = datetime.now()
-        # time_string = now.strftime("%Y-%m-%d %H:%M:%S")
-        # self.write_file(
-        #     os.path.join(self.save_path, "runs.txt"),
-        #     f"reset to next run {time_string} \n", mode="a+")
-        # self.simulationReset()
-        # supervisor_node = self.getFromDef("EnvSet_supervisor")
-        # supervisor_node.restartController()
+        msg = self.handle_receiver()
+        ps_sensor_values = msg[:, 1:]
+        # ps_values_normalized = (ps_sensor_values - 55) / (max(np.max(ps_sensor_values), 450) - 55)
+        epuck_pos = np.zeros((self.num_agents, 2), dtype=np.float32)
+        rotation_angle = np.zeros((self.num_agents, 1), dtype=np.float32)
+        for i, robot in enumerate(self.robots):
+            epuck_pos[i] = robot.getField('translation').getSFVec3f()[:2]
+            rotation = robot.getField('rotation').getSFRotation()
+            rotation_angle[i] = rotation[3] if rotation[2] > 0 else -rotation[3]
+        init_state = np.concatenate([epuck_pos, rotation_angle, ps_sensor_values], axis=1)
+        return init_state
     
     def get_episode_time(self):
         return super(Supervisor, self).getTime() - self.start_time

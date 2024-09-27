@@ -27,7 +27,7 @@ parser.add_argument('--exclude_steps', type=int, default=3,
                     help="the gs values are not stable in the first some steps")
 parser.add_argument("--black_ratio", type=float, default=0.4,
                   help="the ratio of black tiles in the environment")
-parser.add_argument("--time_step", type=int, default=500,
+parser.add_argument("--time_step", type=int, default=320,
                   help="simulation time step in webots")
 parser.add_argument("--frequency_ratio", type=int, default=10, 
                     help="the ratio of frequency differences that "
@@ -50,23 +50,25 @@ parser.add_argument('--env_name', type=str, default="ratio_estimation")
 parser.add_argument('--algorithm_name', type=str, default="A3C")
 parser.add_argument('--max_steps', type=int, default=1000000,  #200000
                     help="Number of env steps to train for")
-parser.add_argument('--episode_length', type=int, default=100, #300
+parser.add_argument('--episode_length', type=int, default=1200, #300
                     help="Max length for any episode")
-parser.add_argument('--buffer_length', type=int, default=100)
+parser.add_argument('--buffer_length', type=int, default=1200)
 parser.add_argument('--model_dir', type=str, default=None)
 
 # RL info
 parser.add_argument('--dist_threshold', type=float, default=0.001,
                     help="used in distance threshold for avoiding bounds")
 parser.add_argument("--collision_distance", type=float, default=0.1)
-parser.add_argument("--reward_collision", type=float, default=-10.0)
-parser.add_argument("--reward_exploration", type=float, default=100.0)
-parser.add_argument('--reward_time', type=float, default=-0.1,
+parser.add_argument("--reward_collision", type=float, default=-1.0)
+parser.add_argument("--reward_exploration", type=float, default=10.0)
+parser.add_argument('--reward_time', type=float, default=-0.05,
                     help="reward (or punishment) given at each time step")
-parser.add_argument('--reward_repeat', type=float, default=-10.0,)
+parser.add_argument('--reward_repeat', type=float, default=-1.0,)
 parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--batch_size', type=int, default=32)
+parser.add_argument('--reward_normalize', action='store_false', default=False)
+parser.add_argument('--grad_norm', type=int, default=100)
 
 # eval
 parser.add_argument('--use_eval', action='store_false',

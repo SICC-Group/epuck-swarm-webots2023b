@@ -24,8 +24,12 @@ class MyRunner(BaseRunner):
             for i in range(self.num_agents)
         ]
         self.received_actions = [False] * self.num_agents
-        self.publishers = [
-            rospy.Publisher(f'agent_{i}', String, queue_size=10) 
+        self.publishers_state = [
+            rospy.Publisher(f'state_agent_{i}', String, queue_size=10) 
+            for i in range(self.num_agents)
+        ]
+        self.publishers_reward = [
+            rospy.Publisher(f'reward_agent_{i}', String, queue_size=10)
             for i in range(self.num_agents)
         ]
 
@@ -92,83 +96,66 @@ class MyRunner(BaseRunner):
             f'episode_r_{i}': 0 for i in range(self.num_agents)
         }
         env: Epuck2Supervisor = self.env
-        env.reset()
+        state = env.reset()
+        map_info = env.get_map_info()
+        
+        episode_states = []
+        episode_actions = []
+        episode_rewards = []
+        episode_dones = []
         local_step = 0
-        init_actions = [0] * self.num_agents  # forward
-        state, map_info, reward, done, info = env.step(init_actions)
-        episode_states, episode_actions, episode_rewards = [], [], []
-        episode_map_info = []
-        episode_states.append(state)  # avail info in [:-1, ], shape of [steps, num_agents, state_dim=11]
-        episode_map_info.append(map_info)  # avail info in [:-1, ]
-        episode_actions.append(init_actions)  # avail info in [1:, ]
-        episode_rewards.append(reward)  # avail info in [1:, ]
-
-        episode_dones = {local_step: done}  # avail info in [1:, ]
-        episode_infos = {local_step: info}  # avail info in [1:, ]
 
         while local_step < self.episode_length and not rospy.is_shutdown():
             local_step += 1
-            if local_step == self.args.exclude_steps:
-                env.reset_visited()
             for i in range(self.num_agents):
                 agent_data = {
                     'state': state[i].tolist(),
                     'map': map_info.tolist(),
-                    'reward': float(reward[i]),
-                    'done': done[i],
-                    'info': info[i],
                     'phase': phase,
                     'total_steps': self.total_train_steps,
-                    'save_dir': self.save_dir
+                    'save_dir': self.save_dir,
+                    'log_dir': self.log_dir,
                 }
                 message = json.dumps(agent_data)
                 # rospy.loginfo(f'Publishing data for agent_{i}: {message}')
-                self.publishers[i].publish(message)
+                self.publishers_state[i].publish(message)
+                time.sleep(0.01)
             
             rate = rospy.Rate(10)  # 10Hz
             while not all(self.received_actions) and not rospy.is_shutdown():
                 rate.sleep()
-            # print(f"======== info: {info[0]}, actions: {self.actions[0]} ==========")
-            s_, map_info_, r_, done_, info_ = env.step(self.actions)
-            # import pdb; pdb.set_trace()
-            episode_states.append(s_)
-            episode_map_info.append(map_info_)
+            s_, map_info_, r, done, _ = env.step(self.actions)
+            for i in range(self.num_agents):
+                agent_data = {
+                    'reward': float(r[i]),
+                    'done': done[i],
+                    'next_state': s_[i].tolist(),
+                    'next_map': map_info_.tolist(),
+                    'phase': phase,
+                    'total_steps': self.total_train_steps,
+                }
+                # rospy.loginfo(f'Publishing data for agent_{i}: {r[i]}')
+                self.publishers_reward[i].publish(json.dumps(agent_data))
+                time.sleep(0.01)
+
+            episode_states.append(state)
+            # episode_map_info.append(map_info_)
             episode_actions.append(deepcopy(self.actions))
-            episode_rewards.append(r_)
-            episode_dones[local_step] = done_
-            episode_infos[local_step] = info_
+            episode_rewards.append(r)
+            episode_dones.append(done)
             
             state = s_
             map_info = map_info_
-            reward = r_
-            done = done_
-            info = info_
             
-            if all(done_):
+            if all(done):
                 break
         
         if phase == "train":
             self.total_train_steps += local_step * self.num_agents
-        
-        for i in range(self.num_agents):
-            agent_data = {
-                'state': state[i].tolist(),
-                'map': map_info.tolist(),
-                'reward': float(reward[i]),
-                'done': done[i],
-                'info': info[i],
-                'phase': phase,
-                'total_steps': self.total_train_steps,
-                'save_dir': self.save_dir
-            }
-            message = json.dumps(agent_data)
-            # rospy.loginfo(f'Publishing data for agent_{i}: {message}')
-            self.publishers[i].publish(message)
-        if all(done):
-            time.sleep(10)
+        time.sleep(10)
             
         for i in range(self.num_agents):
-            env_info[f'episode_r_{i}'] = np.sum(np.array(episode_rewards)[1 + self.args.exclude_steps:, i])
+            env_info[f'episode_r_{i}'] = np.sum(np.array(episode_rewards)[:, i])
         action_collections = [a for episode in episode_actions for a in episode]
         env_info['episode_time'] = env.get_episode_time()
         env_info['ratio_estimate'] = env.get_ratio_estimation()
@@ -183,9 +170,6 @@ class MyRunner(BaseRunner):
             self.env_name, self.algorithm_name,
             self.total_train_steps, self.max_steps,
         ))
-        # for p_id, train_info in zip(self.policy_ids, self.train_infos):
-        #     self.log_train(p_id, train_info)
-
         self.log_env(self.env_infos)
         self.log_clear()
 

@@ -8,12 +8,17 @@ import traceback
 
 
 class Model(nn.Module):
-    def __init__(self, s_dim, a_dim, col, row, device, continuous=False):
+    def __init__(
+        self, s_dim, a_dim, col, row, device,
+        grad_norm, reward_normalize, continuous=False
+    ):
         super().__init__()
         self.s_dim = s_dim
         self.a_dim = a_dim
         self.col = col
         self.row = row
+        self.grad_norm_clip = grad_norm
+        self.reward_normalize = reward_normalize
         self.device = device
         self.continuous = continuous
 
@@ -115,20 +120,10 @@ class Model(nn.Module):
             
             probs = F.softmax(logits, dim=1)
             m = self.distribution(probs)
-            try:
-                exp_v = m.log_prob(a) * td.detach().squeeze()
-            except ValueError:
-                import pdb; pdb.set_trace()
-                print(traceback.format_exc())
-            a_loss = -exp_v
+            exp_v = m.log_prob(a) * td.detach().squeeze()
+            a_loss = -exp_v.unsqueeze(-1)
             total_loss = (c_loss + a_loss).mean()
             return total_loss
-    
-    @staticmethod
-    def v_wrap(np_array, dtype=np.float32):
-        if np_array.dtype != dtype:
-            np_array = np_array.astype(dtype)
-        return torch.from_numpy(np_array)
     
     def train_and_get_grad(self, bs, bmap, ba, br, done, s_, map_, gamma, opt):
         if done:
@@ -137,7 +132,11 @@ class Model(nn.Module):
             v_s_ = self.forward(
                 torch.tensor(s_, dtype=torch.float, device=self.device),
                 torch.tensor(map_, dtype=torch.float, device=self.device)
-            )[-1].data.cpu().numpy()[0]
+            )[-1].data.item()
+        # normalize br
+        if self.reward_normalize:
+            br = np.array(br)
+            br = (br - br.mean()) / (br.std() + 1e-10)
         buffer_v_target = []
         for r in br[::-1]:
             v_s_ = r + gamma * v_s_
@@ -145,21 +144,22 @@ class Model(nn.Module):
         buffer_v_target.reverse()
 
         opt.zero_grad()
-            # import pdb; pdb.set_trace()
-        try:
-            loss = self.loss_func(
-                torch.tensor(bs, dtype=torch.float, device=self.device),
-                torch.tensor(bmap, dtype=torch.float, device=self.device),
-                torch.tensor(ba, dtype=torch.float, device=self.device),
-                torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1)
-            )
-        except TypeError:
-            # import pdb; pdb.set_trace()
-            print(traceback.format_exc())
+        # import pdb; pdb.set_trace()
+        # try:
+        loss = self.loss_func(
+            torch.tensor(bs, dtype=torch.float, device=self.device),
+            torch.tensor(bmap, dtype=torch.float, device=self.device),
+            torch.tensor(ba, dtype=torch.float, device=self.device),
+            torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1)
+        )
+        # except TypeError:
+        #     # import pdb; pdb.set_trace()
+        #     print(traceback.format_exc())
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm_clip)
         grad = self.get_serializable_state_list(to_list=True, option='grad')
         opt.zero_grad()
-        return grad
+        return grad, loss.item()
     
     def load_serializable_state_list(
         self,

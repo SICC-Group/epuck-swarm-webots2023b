@@ -44,7 +44,7 @@ class RobotController(CSVRobot):
         # self.vel_actions = [[0.128, 0], [0.1, 0.8], [0.1, -0.8], [0.05, 1.57], [0.05, -1.57], [-0.128, 0]]
         
         # forward, turn_left, turn_right, backward
-        self.wheel_speeds_ratio = [[1, 1], [0.3, 0.5], [0.3, -0.5], [-0.5, -0.5]]
+        self.wheel_speeds_ratio = [[1, 1], [-0.5, 0.5], [0.5, -0.5], [-0.5, -0.5]]
 
         # # accerleration config - forward, turn_left, turn_right, backward, keep
         # ratio = self.time_step / 1000
@@ -80,10 +80,6 @@ class RobotController(CSVRobot):
         self.time_step = self.args.time_step  # in ms
         # self.steps = 0
 
-        self.black_count = 0
-        self.white_count = 0
-        self.opinion = ""
-        self.estimate_ratio = 0
         self.dist_threshold = 80
         self.neighbors = [0] * self.num_agents
         self.neighbors_dist = [0] * self.num_agents
@@ -95,11 +91,8 @@ class RobotController(CSVRobot):
         self.ps_sensor = []
         for i in range(8):
             ps = self.getDevice(f"ps{i}")
-            ps.enable(self.time_step)
+            ps.enable(self.time_step // self.f_ratio)
             self.ps_sensor.append(ps)
-        # camera
-        self.camera = self.getDevice('camera')
-        self.camera.enable(self.time_step)
         # use 4 LEDs named "led1", "led3", "led5" and "led7"
         self.leds = []
         for i in range(1,8,2):
@@ -119,7 +112,7 @@ class RobotController(CSVRobot):
         self.gs = []
         for i in range(3):
             gs_ = self.getDevice(f"gs{i}")
-            gs_.enable(self.time_step)
+            gs_.enable(self.time_step // self.f_ratio)
             self.gs.append(gs_)
         
     def create_message(self):
@@ -127,14 +120,7 @@ class RobotController(CSVRobot):
         # send to the supervisor
         msg = ['a' + self.robot_name]
         self.gs_values = [gs.getValue() for gs in self.gs]
-        if self.gs_values[1] > 750:
-            self.white_count += 1
-        else:
-            self.black_count += 1
-        # print(self.gs_values)
-        self.estimate_ratio = self.black_count / (self.black_count + self.white_count)
-        msg.append(self.estimate_ratio)
-        
+        msg.append(self.gs_values[1])
         self.ps_sensor_value = [ps.getValue() for ps in self.ps_sensor]
         msg.extend(self.ps_sensor_value)
         return msg
@@ -173,13 +159,9 @@ class RobotController(CSVRobot):
     def run(self):
         i = 0
         try:
-            while self.step(self.timestep//self.f_ratio) != -1:
-                # self.steps += 1
-                # _ = self.handle_receiver_rab()
-                # print("into the while loop")
+            while self.step(self.time_step//self.f_ratio) != -1:
+                self.handle_receiver()
                 if i % self.f_ratio == 0:
-                    self.handle_receiver()
-                    # print("successfully received")
                     self.handle_emitter()
                     i = 0
                 i += 1

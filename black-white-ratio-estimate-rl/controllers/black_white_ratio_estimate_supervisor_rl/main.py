@@ -111,9 +111,10 @@ def main(args_):
     df = pd.DataFrame(columns=columns)
     df.to_csv(progress_filename,index=False)
     
-    # progress_filename_train = os.path.join(run_dir,'progress_train.csv')
-    # df = pd.DataFrame(columns=['step','loss','Q_tot','grad_norm']) 
-    # df.to_csv(progress_filename_train,index=False)
+    for i in range(num_agents):
+        progress_filename_train = os.path.join(run_dir,f'progress_train_{i}.csv')
+        df = pd.DataFrame(columns=['step',f'loss{i}', 'norm']) 
+        df.to_csv(progress_filename_train,index=False)
     
     # progress_filename_train = os.path.join(run_dir,'progress_train_adj.csv')
     # df = pd.DataFrame(columns=['step','advantage','clamp_ratio','rl_loss','entropy_loss','grad_norm']) 
@@ -132,7 +133,7 @@ def main(args_):
         # runner.writter.export_scalars_to_json(str(runner.log_dir + '/summary.json'))
         # runner.writter.close()
         pass
-
+    # os.system("pkill roscore")
 
 if __name__ == "__main__":
     main(sys.argv[1:])

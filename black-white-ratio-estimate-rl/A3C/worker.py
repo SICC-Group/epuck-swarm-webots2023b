@@ -11,7 +11,9 @@ from itertools import islice
 import numpy as np
 import torch
 import rospy
+import pandas as pd
 from std_msgs.msg import String
+from tensorboard_logger import configure, log_value
 
 from model import Model
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -32,110 +34,114 @@ class Worker:
         self.ip, self.port = "172.18.0.1", 9801
         # self.as_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # self.as_client.connect(("172.18.0.1", 9801))
-        
-        self.model = Model(13, 4, self.args.col, self.args.row, device)
+        self.steps = 0
+        self.model = Model(
+            11, 4, self.args.col, self.args.row, device,
+            self.args.grad_norm, self.args.reward_normalize
+        )
         self.model = self.model.to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
-        self.buffer_s = []  # avail info in [:-1]
-        self.buffer_map = []  # avail info in [:-1]
-        self.buffer_a = []  # avail info in [1:]
-        self.buffer_r = []  # avail info in [:-1]
-        self.buffer_info = []
+        self.buffer_s, self.next_s = [], None
+        self.buffer_map, self.next_map = [], None
+        self.buffer_a = []
+        self.buffer_r = []
+        # self.buffer_done = []
         self.done = False
         self.eval_sync = False
         self.save_dir = None
+        self.log_dir = None
 
         self.publisher = rospy.Publisher(f'action_{self.id}', String, queue_size=10)
-        self.subscriber = rospy.Subscriber(f'agent_{self.id}', String, self.state_callback)
+        self.subscriber_state = rospy.Subscriber(f'state_agent_{self.id}', String, self.state_callback)
+        self.subscriber_reward = rospy.Subscriber(f'reward_agent_{self.id}', String, self.reward_callback)
     
     def state_callback(self, data):
-        try:
-            agent_data = json.loads(data.data)
-            if self.save_dir is None:
-                self.save_dir = agent_data['save_dir']
-            if agent_data['phase'] == 'eval':
-                # sync with the global model
-                if not self.eval_sync:
-                    msg = {
-                        "id": self.id,
-                        "info": "access the latest model"
-                    }
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                        client.connect((self.ip, self.port))
-                        self.send_message(msg, client)
-                        model_info = self.get_message(client)
-                    self.model.load_serializable_state_list(model_info["parameters"])
-                    print(f"sync with the global model in eval phase - version {model_info['version']}")
-                    # print(f"len of the buffer_s: {len(self.buffer_s)}")
-                    self.eval_sync = True
-                    if self.id == 0:
-                        torch.save(self.model, self.save_dir + f'/version_{model_info["version"]}.pt')
-                
-                # choose action for avoiding obstacles
-                if agent_data['info'] == 'none':
-                    with torch.no_grad():
-                        action = self.model.choose_action(
-                            torch.tensor(agent_data['state'], dtype=torch.float, device=device),
-                            torch.tensor(agent_data['map'], dtype=torch.float, device=device)
-                        )
-                elif agent_data['info'] == "front":
-                    action = 3  # backward - 5,3
-                elif agent_data['info'] == "right":
-                    action = 1  # turn left - 3,2
-                elif agent_data['info'] == "left":
-                    action = 2  # turn right - 4,2
-                elif agent_data['info'] == "back":
-                    action = 0
-                message = json.dumps(action)
-                # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
-                self.publisher.publish(message)
+        # try:
+        agent_data = json.loads(data.data)
+        if self.save_dir is None:
+            self.save_dir = agent_data['save_dir']
+        if self.log_dir is None:
+            self.log_dir = agent_data['log_dir']
+            tb_dir = os.path.join(self.log_dir, f"worker_{self.id}_train_info")
+            if not os.path.exists(tb_dir):
+                os.makedirs(tb_dir)
+            configure(tb_dir)
+            self.tb_logger = log_value
+        if agent_data['phase'] == 'eval':
+            # sync with the global model
+            if not self.eval_sync:
+                msg = {
+                    "id": self.id,
+                    "info": "access the latest model"
+                }
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.connect((self.ip, self.port))
+                    self.send_message(msg, client)
+                    model_info = self.get_message(client)
+                self.model.load_serializable_state_list(model_info["parameters"])
+                print(f"sync with the global model in eval phase - version {model_info['version']}")
+                # print(f"len of the buffer_s: {len(self.buffer_s)}")
+                self.eval_sync = True
+                if self.id == 0:
+                    torch.save(self.model, self.save_dir + f'/version_{model_info["version"]}.pt')
             
-            elif agent_data['phase'] == 'train':
-                self.eval_sync = False
-                if agent_data['done']:
-                    self.buffer_s.append(agent_data['state'])
-                    self.buffer_map.append(agent_data['map'])
-                    self.buffer_r.append(agent_data['reward'])
-                    self.buffer_info.append(agent_data['info'])
-                    self.buffer_a.append(None)
-                    self.done = agent_data['done']
-                    return
-                
+            # choose action for avoiding obstacles
+            ps_values = agent_data['state'][-8:]
+            right_obstacle = any(
+                value > self.args.ps_threshold for value in ps_values[:3])
+            left_obstacle = any(
+                value > self.args.ps_threshold for value in ps_values[-3:])
+            front_obstacle = right_obstacle and left_obstacle
+            back_obstacle = any(
+                value > self.args.ps_threshold for value in ps_values[3:-3]
+            )
+            if front_obstacle:
+                action = 3
+            elif right_obstacle:
+                action = 1
+            elif left_obstacle:
+                action = 2
+            elif back_obstacle:
+                action = 0
+            else:
+                state = self.normalize_ps_values_of_state(agent_data['state'])
                 with torch.no_grad():
                     action = self.model.choose_action(
-                        torch.tensor(agent_data['state'], dtype=torch.float, device=device),
+                        torch.tensor(state, dtype=torch.float, device=device),
                         torch.tensor(agent_data['map'], dtype=torch.float, device=device)
                     )
-                # if agent_data['info'] == 'none':
-                #     with torch.no_grad():
-                #         action = self.model.choose_action(
-                #             torch.tensor(agent_data['state'], dtype=torch.float32)
-                #         )
-                # elif agent_data['info'] == "front":
-                #     action = 3  # backward - 5,3
-                # elif agent_data['info'] == "right":
-                #     action = 1  # turn left - 3,2
-                # elif agent_data['info'] == "left":
-                #     action = 2  # turn right - 4,2
-                # elif agent_data['info'] == "back":
-                #     action = 0
-                
-                self.buffer_a.append(action)  # action type, should be `int`
-                self.buffer_s.append(agent_data['state'])
-                self.buffer_map.append(agent_data['map'])
-                self.buffer_r.append(agent_data['reward'])
-                self.buffer_info.append(agent_data['info'])
-                message = json.dumps(action)
-                # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
-                self.publisher.publish(message)
+            message = json.dumps(action)
+            # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
+            self.publisher.publish(message)
+        
+        elif agent_data['phase'] == 'train':
+            self.eval_sync = False
+            state = self.normalize_ps_values_of_state(agent_data['state'])
+            self.buffer_s.append(state)
+            self.buffer_map.append(agent_data['map'])
             
-            else:
-                if 'phase' not in agent_data:
-                    print(f"none phase info")
-                else:
-                    print(f"unknown phase: {agent_data['phase']}")
-        except Exception as e:
-            print(traceback.format_exc())
+            with torch.no_grad():
+                action = self.model.choose_action(
+                    torch.tensor(state, dtype=torch.float, device=device),
+                    torch.tensor(agent_data['map'], dtype=torch.float, device=device)
+                )
+            
+            self.buffer_a.append(action)  # action type, should be `int`
+            message = json.dumps(action)
+            # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
+            self.publisher.publish(message)
+        # except Exception as e:
+        #     print(traceback.format_exc())
+    
+    def reward_callback(self, data):
+        agent_data = json.loads(data.data)
+        # rospy.loginfo(f"reward info: {agent_data['reward']}")
+        if agent_data['phase'] == 'train':
+            self.buffer_r.append(agent_data['reward'])
+            # self.buffer_done.append(agent_data['done'])
+            self.next_s = agent_data['next_state']
+            self.next_map = agent_data['next_map']
+            self.done = agent_data['done']
     
     def get_message(self, connection) -> dict:
         full_data = b""
@@ -184,53 +190,62 @@ class Worker:
             self.model.load_serializable_state_list(model_info["parameters"])
             print(f"access the latest model - version {model_info['version']}")
     
+    def normalize_ps_values_of_state(self, s):
+        ps_values = s[-8:]
+        ps_values_normalized = (np.array(ps_values) - 55) / (max(np.max(ps_values), 450) - 55)
+        s[-8:] = ps_values_normalized
+        return s
+    
     def run(self):
         self.init_model()
-        try:
-            # 获取来自webots-supervisor的数据
-            while not rospy.is_shutdown():
-                if self.done:
-                    print("done info: ", self.done)
-                    # # collect the buffer data
-                    # buffer_s = list(islice(self.buffer_s, self.args.buffer_length))
-                    # buffer_a = list(islice(self.buffer_a, self.args.buffer_length))
-                    # buffer_r = list(islice(self.buffer_r, self.args.buffer_length))
-                    # # update the buffer data
-                    # self.buffer_s = deque(islice(self.buffer_s, self.args.buffer_length, None))
-                    # self.buffer_a = deque(islice(self.buffer_a, self.args.buffer_length, None))
-                    # self.buffer_r = deque(islice(self.buffer_r, self.args.buffer_length, None))
-                    # train
-                    grad = self.model.train_and_get_grad(
-                        self.buffer_s[self.args.exclude_steps:-1],
-                        self.buffer_map[self.args.exclude_steps:-1],
-                        self.buffer_a[self.args.exclude_steps:-1], 
-                        self.buffer_r[self.args.exclude_steps + 1:],
-                        self.done, self.buffer_s[-1], self.buffer_map[-1],
-                        self.args.gamma, self.optimizer
-                    )
-                    self.done = False
-                    self.buffer_s = []
-                    self.buffer_map = []
-                    self.buffer_a = []
-                    self.buffer_r = []
-                    self.buffer_info = []
-                    msg = {
-                        "id": self.id,
-                        "info": {
-                            "gradients": grad,
-                            "lr": self.args.lr
-                        }
+        # try:
+        while not rospy.is_shutdown():
+            if self.done or all([
+                len(self.buffer_s) >= self.args.episode_length,
+                len(self.buffer_map) >= self.args.episode_length,
+                len(self.buffer_a) >= self.args.episode_length,
+                len(self.buffer_r) >= self.args.episode_length,
+            ]):
+                print("done info: ", self.done)
+                self.steps += 1
+                # train
+                grad, loss = self.model.train_and_get_grad(
+                    self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                    self.done, self.normalize_ps_values_of_state(self.next_s),
+                    self.next_map, self.args.gamma, self.optimizer
+                )
+                self.done = False
+                self.buffer_s = []
+                self.buffer_map = []
+                self.buffer_a = []
+                self.buffer_r = []
+                # self.buffer_done = []
+                msg = {
+                    "id": self.id,
+                    "info": {
+                        "gradients": grad,
+                        "lr": self.args.lr
                     }
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                        client.connect((self.ip, self.port))
-                        self.send_message(msg, client)
-                        model_info = self.get_message(client)
-                    self.model.load_serializable_state_list(model_info["parameters"])
-                    print(f"access the latest model - version {model_info['version']}")
-                time.sleep(0.1)
-            print("rospy is shutdown")
-        except Exception as e:
-            print(traceback.format_exc())
+                }
+                self.tb_logger(f"loss_{self.id}", loss, self.steps)
+                norm_ = np.linalg.norm(grad)
+                info_record = [self.steps, loss, norm_]
+                print(f"step: {self.steps}, loss: {loss}, grad_norm: {norm_}")
+                df = pd.DataFrame([info_record])
+                df.to_csv(
+                    os.path.join(self.log_dir, f'../progress_train_{self.id}.csv'),
+                    mode='a', header=False, index=False
+                )
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.connect((self.ip, self.port))
+                    self.send_message(msg, client)
+                    model_info = self.get_message(client)
+                self.model.load_serializable_state_list(model_info["parameters"])
+                print(f"access the latest model - version {model_info['version']}")
+            time.sleep(0.1)
+        print("rospy is shutdown")
+        # except Exception as e:
+        #     print(traceback.format_exc())
 
 
 if __name__ == '__main__':
