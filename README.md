@@ -48,3 +48,8 @@ https://pan.baidu.com/s/1mtrY0Fwr6RJt6HVxyEfKdA?pwd=s6s5#list/path=%2F
 git clone swarm_behavior and interfaces package
 
 then, apt install ros2_webots package
+
+## Swarm_frame use
+git clone swarm_frame and swarm_interfaces package
+
+start a Webots simulation，it can contain one or more robots，then launch the demo.
