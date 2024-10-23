@@ -1,0 +1,6 @@
+float32 motion_goal  # 目标角度，以弧度表示
+
+---
+bool result  # 表示动作执行结果，True 表示成功，False 表示失败
+
+---
