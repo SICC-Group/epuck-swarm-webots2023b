@@ -26,6 +26,7 @@ class BaseRunner(object):
         self.eval_interval = self.args.eval_interval
         self.save_interval = self.args.save_interval
         self.log_interval = self.args.log_interval
+        self.train_count, self.eval_count = 0, 0
         self.gamma = self.args.gamma
         self.use_save = self.args.use_save
         # self.total_env_steps = 0  # total environment interactions collected during training
@@ -53,7 +54,11 @@ class BaseRunner(object):
                 os.makedirs(self.log_dir)
             configure(self.log_dir)
             self.tb_logger = log_value
-            
+
+            self.image_dir = str(self.run_dir / 'images')
+            if not os.path.exists(self.image_dir):
+                os.makedirs(self.image_dir)
+
             self.save_dir = str(self.run_dir / 'models')
             if not os.path.exists(self.save_dir):
                 os.makedirs(self.save_dir)

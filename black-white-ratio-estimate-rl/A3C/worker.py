@@ -2,7 +2,7 @@ import socket
 import json
 
 import time
-import random
+import multiprocessing
 import sys, os
 import traceback
 from collections import deque
@@ -37,7 +37,8 @@ class Worker:
         self.steps = 0
         self.model = Model(
             11, 4, self.args.col, self.args.row, device,
-            self.args.grad_norm, self.args.reward_normalize
+            self.args.grad_norm_init, self.args.norm_decay_steps,
+            self.args.grad_norm_min, self.args.reward_normalize
         )
         self.model = self.model.to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
@@ -56,7 +57,6 @@ class Worker:
         self.subscriber_reward = rospy.Subscriber(f'reward_agent_{self.id}', String, self.reward_callback)
     
     def state_callback(self, data):
-        # try:
         agent_data = json.loads(data.data)
         if self.save_dir is None:
             self.save_dir = agent_data['save_dir']
@@ -79,8 +79,7 @@ class Worker:
                     self.send_message(msg, client)
                     model_info = self.get_message(client)
                 self.model.load_serializable_state_list(model_info["parameters"])
-                print(f"sync with the global model in eval phase - version {model_info['version']}")
-                # print(f"len of the buffer_s: {len(self.buffer_s)}")
+                print(f"IN EVALUATION, sync with the global model in eval phase - version {model_info['version']}")
                 self.eval_sync = True
                 if self.id == 0:
                     torch.save(self.model, self.save_dir + f'/version_{model_info["version"]}.pt')
@@ -115,7 +114,18 @@ class Worker:
             self.publisher.publish(message)
         
         elif agent_data['phase'] == 'train':
-            self.eval_sync = False
+            if self.eval_sync: self.eval_sync = False
+            if agent_data['step'] == 1 and self.steps % self.args.eval_interval == 0:
+                msg = {
+                    "id": self.id,
+                    "info": "access the latest model"
+                }
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    client.connect((self.ip, self.port))
+                    self.send_message(msg, client)
+                    model_info = self.get_message(client)
+                self.model.load_serializable_state_list(model_info["parameters"])
+                print(f"\033[0;31m== sync with the global model in training - version {model_info['version']}\033[0m")
             state = self.normalize_ps_values_of_state(agent_data['state'])
             self.buffer_s.append(state)
             self.buffer_map.append(agent_data['map'])
@@ -130,8 +140,6 @@ class Worker:
             message = json.dumps(action)
             # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
             self.publisher.publish(message)
-        # except Exception as e:
-        #     print(traceback.format_exc())
     
     def reward_callback(self, data):
         agent_data = json.loads(data.data)
@@ -196,56 +204,64 @@ class Worker:
         s[-8:] = ps_values_normalized
         return s
     
+    def train_and_update(self, bs, bmap, ba, br, done, s_, map_, gamma, opt):
+        grad, loss = self.model.train_and_get_grad(
+            bs, bmap, ba, br, done, s_, map_, gamma, opt, self.steps
+        )
+        msg = {
+            "id": self.id,
+            "info": {
+                "gradients": grad,
+                "lr": self.args.lr
+            }
+        }
+        self.tb_logger(f"loss_{self.id}", loss, self.steps)
+        norm_ = np.linalg.norm(grad)
+        info_record = [self.steps, loss, norm_]
+        print(f"step: {self.steps}, loss: {loss}, grad_norm: {norm_}")
+        df = pd.DataFrame([info_record])
+        df.to_csv(
+            os.path.join(self.log_dir, f'../progress_train_{self.id}.csv'),
+            mode='a', header=False, index=False
+        )
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.connect((self.ip, self.port))
+            self.send_message(msg, client)
+            model_info = self.get_message(client)
+        self.model.load_serializable_state_list(model_info["parameters"])
+        if self.id == 0 and self.steps % self.args.eval_interval == 0:
+            torch.save(self.model, self.save_dir + f'/version_{model_info["version"]}.pt')
+        print(f"access the latest model - version {model_info['version']}")
+    
     def run(self):
         self.init_model()
-        # try:
         while not rospy.is_shutdown():
-            if self.done or all([
-                len(self.buffer_s) >= self.args.episode_length,
-                len(self.buffer_map) >= self.args.episode_length,
-                len(self.buffer_a) >= self.args.episode_length,
-                len(self.buffer_r) >= self.args.episode_length,
-            ]):
-                print("done info: ", self.done)
+            # if self.done or all([
+            #     len(self.buffer_s) >= self.args.buffer_length,
+            #     len(self.buffer_map) >= self.args.buffer_length,
+            #     len(self.buffer_a) >= self.args.buffer_length,
+            #     len(self.buffer_r) >= self.args.buffer_length,
+            # ]):
+            if self.done:
                 self.steps += 1
-                # train
-                grad, loss = self.model.train_and_get_grad(
-                    self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
-                    self.done, self.normalize_ps_values_of_state(self.next_s),
-                    self.next_map, self.args.gamma, self.optimizer
+                p = multiprocessing.Process(
+                    target=self.train_and_update,
+                    args=(
+                        self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                        self.done, self.normalize_ps_values_of_state(self.next_s),
+                        self.next_map, self.args.gamma, self.optimizer
+                    )
                 )
+                p.start()
                 self.done = False
                 self.buffer_s = []
                 self.buffer_map = []
                 self.buffer_a = []
                 self.buffer_r = []
                 # self.buffer_done = []
-                msg = {
-                    "id": self.id,
-                    "info": {
-                        "gradients": grad,
-                        "lr": self.args.lr
-                    }
-                }
-                self.tb_logger(f"loss_{self.id}", loss, self.steps)
-                norm_ = np.linalg.norm(grad)
-                info_record = [self.steps, loss, norm_]
-                print(f"step: {self.steps}, loss: {loss}, grad_norm: {norm_}")
-                df = pd.DataFrame([info_record])
-                df.to_csv(
-                    os.path.join(self.log_dir, f'../progress_train_{self.id}.csv'),
-                    mode='a', header=False, index=False
-                )
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                    client.connect((self.ip, self.port))
-                    self.send_message(msg, client)
-                    model_info = self.get_message(client)
-                self.model.load_serializable_state_list(model_info["parameters"])
-                print(f"access the latest model - version {model_info['version']}")
+                
             time.sleep(0.1)
         print("rospy is shutdown")
-        # except Exception as e:
-        #     print(traceback.format_exc())
 
 
 if __name__ == '__main__':

@@ -4,6 +4,8 @@ import time
 import datetime
 import traceback
 
+from model import Model
+
 
 class Server(object):
     def __init__(self, port=9801) -> None:
@@ -35,7 +37,7 @@ class Server(object):
             # while len(self.parameters) == 0:
             #     time.sleep(0.1)
             #     print("wait for the initialization of the parameters")
-            print(f"sending the latest model to the worker {full_data['id']}")
+            print(f"==== sending the latest model to the worker {full_data['id']}")
             return self.parameters, self.version
         
         if len(self.parameters) == 0 and 'parameters' in full_data['info']:

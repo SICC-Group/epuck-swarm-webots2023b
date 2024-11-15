@@ -96,10 +96,13 @@ def main(args_):
     
     columns = ['step']
     for i in range(num_agents):
-        columns.append(f'episode_reward_{i}')
+        columns.append(f'{i}_episode_r')
+        columns.append(f'{i}_episode_r_mean')
+        columns.append(f'{i}_ratio_estimate')
+        columns.append(f'{i}_exploration_ratio')
+    columns.append('episode_steps')
+    columns.append('global_ratio')
     columns.append('episode_time')
-    columns.append(f'ratio_estimation')
-    columns.append(f'exploration_rate')
     for i in range(4):
         columns.append(f'action_{i}')
     
@@ -107,9 +110,13 @@ def main(args_):
     df = pd.DataFrame(columns=columns)
     df.to_csv(progress_filename,index=False)
     
-    progress_filename = os.path.join(run_dir,'progress_eval.csv')
-    df = pd.DataFrame(columns=columns)
-    df.to_csv(progress_filename,index=False)
+    columns = ['step']
+    columns.extend([f'local_ratio_{i}' for i in range(num_agents)])
+    columns.append('global_ratio')
+    for i in range(args.num_eval_episodes):
+        progress_filename = os.path.join(run_dir,f'progress_eval_{i}.csv')
+        df = pd.DataFrame(columns=columns)
+        df.to_csv(progress_filename,index=False)
     
     for i in range(num_agents):
         progress_filename_train = os.path.join(run_dir,f'progress_train_{i}.csv')
@@ -123,6 +130,7 @@ def main(args_):
     try:
         while total_train_steps < args.max_steps:
             total_train_steps = runner.run()
+        runner.eval()
     except KeyboardInterrupt:
         print("=== {0:>8} is aborted by keyboard interrupt".format('Main'))
     env.close()

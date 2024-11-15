@@ -2,6 +2,7 @@
 import os, sys
 import random
 import random
+from collections import deque
 import time
 from datetime import datetime
 
@@ -19,30 +20,40 @@ exp_path = os.path.join(current_dir, "..", "..")
 sys.path.append(exp_path)
 from config import parser
 
-class Env:
-    def __init__(self, col, row, threshold=0.04):
+class LocalMap:
+    def __init__(self, col, row, id, threshold=0.04):
         self.col = col
         self.row = row
+        self.id = id
         self.threshold = threshold
+        self.black_count = 0
+        self.white_count = 0
         self.offset_x = -0.1 * self.row / 2 - 0.05
         self.offset_y = -0.1 * self.col / 2 - 0.05
         
         self.tiles = [(self.offset_x + 0.1 * (j + 1), self.offset_y + 0.1 * (i + 1))
                       for i in range(self.col) for j in range(self.row)]
         self.tiles_visited = [False for _ in range(self.col * self.row)]
-        self.last_exploration = 0
 
     def check(self, x, y, angle):
         # calculate the position of gs
-        x = x + 0.04 * math.cos(angle)
-        y = y + 0.04 * math.sin(angle)
+        x = x + 0.03 * math.cos(angle)
+        y = y + 0.03 * math.sin(angle)
         for idx, (tile_x, tile_y) in enumerate(self.tiles):
-            if tile_x - 0.035 < x < tile_x + 0.035 and tile_y - 0.035 < y < tile_y + 0.035:
+            if ((tile_x - self.threshold < x < tile_x + self.threshold) and 
+                (tile_y - self.threshold < y < tile_y + self.threshold)):
                 if not self.tiles_visited[idx]:
                     self.tiles_visited[idx] = True
                     return True, idx
         
         return False, None
+
+    def get_ratio(self):
+        try:
+            return self.black_count / (self.black_count + self.white_count)
+        except ZeroDivisionError:
+            # print(f"agent {self.id} has no visited tiles - zero division error")
+            return -1
 
 
 class Epuck2Supervisor(CSVSupervisorEnv):
@@ -51,13 +62,10 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.args = args
         self.save_path = save_path
         self.col, self.row = col, row
-        self.black_count = 0
-        self.white_count = 0
         self.start_time = 0
         self.num_agents = self.args.num_agents
         self.ps_threshold = self.args.ps_threshold
         self.dist_threshold = self.args.dist_threshold
-        self.num_envs = 1
         self.ranger_robots = list(range(self.args.ranger_robots))
         self.comm_ranges = [
             self.args.range1 if id in self.ranger_robots else self.args.range0
@@ -71,15 +79,24 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         for g in self.groups.values():
             self.swarm.extend(g)
         self.all_states = None
-        self.start_exploration = False
-        self.env_tiles = Env(self.col, self.row, self.args.center_threshold)
+        self.global_ratio_list = []  # list of tuples (step, ratio)
+        self.global_ratio_estimation = 0
+        self.is_update_global_ratio = False
+        self.update_count = 0
+        self.local_maps = [
+            LocalMap(self.col, self.row, i, self.args.center_threshold)
+            for i in range(self.num_agents)]
+        self.exploration_ratios = None  # exploration ratio for all agents
+        self.local_ratios = None  # local ratio estimation for all 
+        self.local_ratio_dict = {i: [] for i in range(self.num_agents)}
+        self.max_ratio_diff = max(abs(self.args.black_ratio - 0), abs(1 - self.args.black_ratio))
         
         # print info
         # print("time_step: ", self.time_step)
         print("========== supervisor info ==========")
         print(f"groups: {self.groups}")
         print(f"swarm: {self.swarm}")
-        
+        self.start_flag = True
         self.time_step = self.args.time_step  # in ms
         self.f_ratio = self.args.frequency_ratio
 
@@ -111,11 +128,14 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.steps = 0
         self.reward_time = self.args.reward_time
         self.reward_exploration = self.args.reward_exploration
+        self.reward_exp_ratio = self.args.reward_exploration_ratio
         self.reward_repeat = self.args.reward_repeat
         self.collision_distance = self.args.collision_distance
         self.reward_collision = self.args.reward_collision
-        self.num_actions = 5  # The agent can perform 2 actions
-        self.num_states = 2 + 1 + 8 # position + angle + 8 ps sensor values
+        self.reward_local_ratio = self.args.reward_local_ratio
+        self.reward_global_ratio = self.args.reward_global_ratio
+        self.num_actions = 4
+        self.num_states = 1 + 2 + 1 + 8 # ratio + 2 position + angle + 8 ps sensor values
     
     def init_env(self, black_ratio):
         """ In the two-dimensional space by deault
@@ -272,17 +292,15 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         super(Supervisor, self).step(self.time_step // self.f_ratio)
         print("========== import robots successfully ==========")
 
-    def step(self, action):
+    def step(self, action, phase, train_count):
         self.handle_emitter(action)
-        for _ in range(self.f_ratio):
-            if super(Supervisor, self).step(self.time_step // self.f_ratio) == -1:
-                exit()
+        # for _ in range(self.f_ratio):
+        #     super(Supervisor, self).step(self.time_step // self.f_ratio)
+        super(Supervisor, self).step(self.time_step)
         msg = self.handle_receiver() # gs_values[1] and ps sensor values
         self.steps += 1
         self.gs_values_1 = msg[:, 0]  # shape of (num_agents,)
         ps_sensor_values = msg[:, 1:]  # shape of (num_agents, 8)
-        # if self.start_exploration:
-        #     self.update_emissive_color([])
         
         epuck_pos = np.zeros((self.num_agents, 2), dtype=np.float32)
         rotation_angle = np.zeros((self.num_agents, 1), dtype=np.float32)
@@ -290,9 +308,14 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             epuck_pos[i] = robot.getField('translation').getSFVec3f()[:2]
             rotation = robot.getField('rotation').getSFRotation()
             rotation_angle[i] = rotation[3] if rotation[2] > 0 else -rotation[3]
-        is_new_tiles = [False] * self.num_agents
-        if self.start_exploration:
-            is_new_tiles = self.update_env(epuck_pos, rotation_angle)
+        
+        is_new_tiles = self.update_env(epuck_pos, rotation_angle)
+        self.exploration_ratios = self.get_exploration_ratio()
+        self.local_ratios = self.get_ratio_estimation()
+        for k, v in self.local_ratio_dict.items():
+            v.append(self.local_ratios[k])
+        local_ratios = np.expand_dims(self.local_ratios, axis=-1)
+        exp_ratios = np.expand_dims(self.exploration_ratios, axis=-1)
         
         # is_new_tiles_np = np.expand_dims(is_new_tiles, axis=-1).astype(np.float32)
         # exploration_ratio = np.expand_dims([sum(self.env_tiles.tiles_visited)/(self.row * self.col)] * self.num_agents, axis=-1)
@@ -300,11 +323,21 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.all_states = np.concatenate(
             [epuck_pos, rotation_angle, ps_sensor_values], axis=1
         )
+        if ((self.steps <= 2000 and self.steps % self.args.update_ratio_steps == 0) or 
+            (self.steps > 2000 and self.steps % (self.args.update_ratio_steps // 2) == 0)):
+            self._update_global_ratio()
+            self.is_update_global_ratio = True
+        if self.steps % 2000 == 0:
+            s = self.get_exploration_ratio()
+            print(f"steps: {self.steps}")
+            print(self.global_ratio_list[-2][1], self.global_ratio_list[-1][1])
+            for i in range(self.num_agents):
+                print(f"agent {i} - local ratio: {self.local_ratios[i]:.4f}, exploration ratio: {s[i]:.4f}")
         return (
             self.all_states,  # [num_agents x num_states], np.array
-            self.get_map_info(),  # [col, row], np.array
-            self.get_reward(epuck_pos, is_new_tiles, action),  # [num_agents,], np.array
-            self.is_done(),  # [num_agents,], list
+            self.get_map_info(),  # num_agents x [col, row], list of np.array
+            self.get_reward(epuck_pos, exp_ratios, is_new_tiles, action),  # [num_agents,], np.array
+            self.is_done(phase, train_count),  # [num_agents,], list
             self.get_info()  # [num_agents,]
         )
        
@@ -322,17 +355,21 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         return message
     
     def get_map_info(self):
-        map_info = self.env_tiles.tiles_visited
-        map_info = np.array(map_info).astype(np.int32).reshape(self.col, self.row)
-        return map_info
+        map_infos = []
+        for local_map in self.local_maps:
+            map_info = np.array(local_map.tiles_visited).astype(np.int32).reshape(local_map.col, local_map.row)
+            map_infos.append(map_info)
+        return map_infos
     
     
-    def get_reward(self, positions, is_new_tiles, action):
+    def get_reward(self, positions, exp_ratios, is_new_tiles, action):
         # super().get_reward(action)
         '''if (self.message is None or len(self.message) == 0
                 or self.observation is None):
             return 0'''
-        rewards = np.zeros((self.num_agents,), dtype=np.float32) + self.reward_time
+        assert len(is_new_tiles) == self.num_agents, "is_new_tiles should have the same length as num_agents"
+        # exploration rewards
+        exploration_r = np.zeros((self.num_agents,), dtype=np.float32) + self.reward_time
         collision_bounds = (
             (positions[:, 0] < self.x_min) | (positions[:, 0] > self.x_max) | 
             (positions[:, 1] < self.y_min) | (positions[:, 1] > self.y_max)
@@ -341,18 +378,48 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             (positions[:, np.newaxis, :] - positions[np.newaxis, :, :]) ** 2, axis=-1
         ))
         collision_counts = np.sum(dist_matrix < self.collision_distance, axis=1) - 1 + collision_bounds.astype(int)
-        
         for i in range(self.num_agents):
-            rewards[i] += self.reward_exploration if is_new_tiles[i] else self.reward_repeat
-            rewards[i] += collision_counts[i] * self.reward_collision
-        return rewards
+            exploration_r[i] += self.reward_exploration if is_new_tiles[i] else self.reward_repeat
+            exploration_r[i] += collision_counts[i] * self.reward_collision
+            # exploration_r[i] += self.reward_exp_ratio * exp_ratios[i]
+        
+        # ratio estimation rewards
+        ratio_r = np.zeros((self.num_agents,), dtype=np.float32)
+        # local
+        for i in range(self.num_agents):
+            ratio_r[i] += self.reward_local_ratio * (-abs(self.local_ratios[i] - self.args.black_ratio))
+        # global
+        if self.is_update_global_ratio:
+            ratio_r += self.reward_global_ratio * (
+                1 - abs(self.global_ratio_estimation - self.args.black_ratio)
+            )
+            self.is_update_global_ratio = False
+        
+        # if self.steps < self.args.exploration_steps:
+        #     rewards = 0.8 * exploration_r + 0.2 * ratio_r
+        # else:
+        #     rewards = 0.2 * exploration_r + 0.8 * ratio_r
+        return exploration_r + ratio_r
     
-    def is_done(self):
-        # super().is_done()
-        if self.env_tiles.tiles_visited.count(True) == int(0.9 * self.col * self.row):
-            return [True] * self.num_agents
-        else:
-            return [False] * self.num_agents
+    def is_done(self, phase, train_count):
+        # super().is_done() and 
+            # abs(self.global_ratio_list[1] - self.global_ratio_list[0]) < 0.01
+        # if (all([r > self.args.done_exploration for r in self.exploration_ratios])and 
+        #     abs(self.global_ratio_list[1] - self.global_ratio_list[0]) < 0.01):
+        if phase == "train":
+            exploration = self.args.done_exploration - 0.005 * train_count
+            if (np.mean(self.exploration_ratios) > max(exploration, self.args.min_exploration) and 
+                abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference):
+                print(f"ratio -2:{self.global_ratio_list[-2][1]}, ratio -1:{self.global_ratio_list[-1][1]}") 
+                return [True] * self.num_agents
+            else:
+                return [False] * self.num_agents
+        elif phase == "eval":
+            if abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference:
+                print(f"ratio -2:{self.global_ratio_list[-2][1]}, ratio -1:{self.global_ratio_list[-1][1]}") 
+                return [True] * self.num_agents
+            else:
+                return [False] * self.num_agents
     
     def get_info(self):
         # super().get_info()
@@ -379,11 +446,10 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         return None
     
     def reset_visited(self):
-        self.start_exploration = True
-        self.env_tiles.tiles_visited = [False for _ in range(self.col * self.row)]
-        self.env_tiles.last_exploration = 0
-        self.black_count = 0
-        self.white_count = 0
+        for local_map in self.local_maps:
+            local_map.tiles_visited = [False for _ in range(local_map.col * local_map.row)]
+            local_map.black_count = 0
+            local_map.white_count = 0
 
         floor_tiles_root = self.getFromDef("Floor_Tiles")
         floor_tiles_child = floor_tiles_root.getField("children")
@@ -415,7 +481,16 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         #     robot.getField('rotation').setSFRotation([0, 0, 1, random.uniform(-np.pi, np.pi)])
     
     def reset(self):
+        if self.start_flag:
+            for _ in range(self.args.exclude_steps):
+                super(Supervisor, self).step(self.time_step)
+                msg = self.handle_receiver()
+            self.start_flag = False
         self.steps = 0
+        self.global_ratio_estimation = 0
+        self.update_count = 0
+        self.global_ratio_list.clear()
+        self.local_ratio_dict = {i: [] for i in range(self.num_agents)}
         # self.simulationReset()
         # for robot in self.robots:
         #     robot.restartController()
@@ -423,8 +498,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.start_time = super(Supervisor, self).getTime()
         self.reset_state()
         self.reset_visited()
-        for _ in range(self.f_ratio):
-            super(Supervisor, self).step(self.time_step//self.f_ratio)
+        super(Supervisor, self).step(self.time_step)
         msg = self.handle_receiver()
         ps_sensor_values = msg[:, 1:]
         # ps_values_normalized = (ps_sensor_values - 55) / (max(np.max(ps_sensor_values), 450) - 55)
@@ -434,33 +508,55 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             epuck_pos[i] = robot.getField('translation').getSFVec3f()[:2]
             rotation = robot.getField('rotation').getSFRotation()
             rotation_angle[i] = rotation[3] if rotation[2] > 0 else -rotation[3]
+        local_ratios = np.expand_dims(self.get_ratio_estimation(), axis=-1)
         init_state = np.concatenate([epuck_pos, rotation_angle, ps_sensor_values], axis=1)
         return init_state
     
+    def _update_global_ratio(self):
+        if self.update_count == 0:
+            for r in self.local_ratios:
+                delta = r - self.global_ratio_estimation
+                self.update_count += 1
+                self.global_ratio_estimation += delta / self.update_count
+        else:
+            ok_count = 0
+            for r in self.local_ratios:
+                delta = r - self.global_ratio_estimation
+                if abs(delta) < 0.1:
+                    ok_count += 1
+                    self.update_count += 1
+                    self.global_ratio_estimation += delta / self.update_count
+            if ok_count == 0:
+                for r in self.local_ratios:
+                    delta = r - self.global_ratio_estimation
+                    self.update_count += 1
+                    self.global_ratio_estimation += delta / self.update_count
+        self.global_ratio_list.append((self.steps, self.global_ratio_estimation))
+
     def get_episode_time(self):
         return super(Supervisor, self).getTime() - self.start_time
     
     def get_ratio_estimation(self):
         """final ratio estimation"""
-        try:
-            ratio = self.black_count / (self.black_count + self.white_count)
-        except ZeroDivisionError:
-            ratio = 0
-        return ratio
+        return [local_map.get_ratio() for local_map in self.local_maps]
     
+    def get_exploration_ratio(self): 
+        return [sum(local_map.tiles_visited) / (local_map.row * local_map.col) 
+                for local_map in self.local_maps]
+
     def update_env(self, epuck_pos, rotation_angle):
         is_new_tiles = []
         new_tiles_idxs = []
         for i in range(self.num_agents):
             x, y = epuck_pos[i]
-            is_new, idx = self.env_tiles.check(x, y, rotation_angle[i])
+            is_new, idx = self.local_maps[i].check(x, y, rotation_angle[i])
             is_new_tiles.append(is_new)
             if is_new:
                 new_tiles_idxs.append(idx)
                 if self.gs_values_1[i] > 900:
-                    self.white_count += 1
+                    self.local_maps[i].white_count += 1
                 else:
-                    self.black_count += 1
+                    self.local_maps[i].black_count += 1
         
         if len(new_tiles_idxs) > 0:
             floor_tiles_root = self.getFromDef("Floor_Tiles")

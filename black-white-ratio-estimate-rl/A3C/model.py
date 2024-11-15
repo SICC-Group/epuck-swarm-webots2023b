@@ -10,14 +10,17 @@ import traceback
 class Model(nn.Module):
     def __init__(
         self, s_dim, a_dim, col, row, device,
-        grad_norm, reward_normalize, continuous=False
+        grad_norm_init, norm_decay_steps, grad_norm_min, 
+        reward_normalize, continuous=False
     ):
         super().__init__()
         self.s_dim = s_dim
         self.a_dim = a_dim
         self.col = col
         self.row = row
-        self.grad_norm_clip = grad_norm
+        self.grad_norm = grad_norm_init
+        self.norm_decay_steps = norm_decay_steps
+        self.grad_norm_min = grad_norm_min
         self.reward_normalize = reward_normalize
         self.device = device
         self.continuous = continuous
@@ -50,13 +53,25 @@ class Model(nn.Module):
                 nn.Linear(128, 64),
                 nn.ReLU(),
             )
-            self.policy = nn.Linear(64, a_dim)
-            self.value = nn.Linear(64, 1)
+            self.policy = nn.Sequential(
+                nn.Linear(64, 32),
+                nn.ReLU(),
+                nn.Linear(32, a_dim)
+            )
+            self.value = nn.Sequential(
+                nn.Linear(64, 32),
+                nn.ReLU(),
+                nn.Linear(32, 1)
+            )
             self.distribution = torch.distributions.Categorical
 
         self.layer_shape = {k: v.shape for k, v in self.state_dict().items()}
 
     def forward(self, x, map_info):
+        """
+        logits: (batch_size, a_dim);
+        values: (batch_size, 1);
+        """
         if self.continuous:
             a1 = F.relu(self.a1(x))
             mu = 2 * F.relu(self.mu(a1))
@@ -80,10 +95,6 @@ class Model(nn.Module):
             x = self.fc(x)
             logits = self.policy(x)
             values = self.value(x)
-            # pi1 = torch.tanh(self.pi1(x))
-            # logits = self.pi2(pi1)
-            # v1 = torch.tanh(self.v1(x))
-            # values = self.v2(v1)
             return logits, values
     
     def choose_action(self, s, map_info):
@@ -125,7 +136,7 @@ class Model(nn.Module):
             total_loss = (c_loss + a_loss).mean()
             return total_loss
     
-    def train_and_get_grad(self, bs, bmap, ba, br, done, s_, map_, gamma, opt):
+    def train_and_get_grad(self, bs, bmap, ba, br, done, s_, map_, gamma, opt, steps):
         if done:
             v_s_ = 0
         else:
@@ -144,20 +155,18 @@ class Model(nn.Module):
         buffer_v_target.reverse()
 
         opt.zero_grad()
-        # import pdb; pdb.set_trace()
-        # try:
         loss = self.loss_func(
             torch.tensor(bs, dtype=torch.float, device=self.device),
             torch.tensor(bmap, dtype=torch.float, device=self.device),
             torch.tensor(ba, dtype=torch.float, device=self.device),
             torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1)
         )
-        # except TypeError:
-        #     # import pdb; pdb.set_trace()
-        #     print(traceback.format_exc())
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm_clip)
+        norm_ = self.grad_norm if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
+        # torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
         grad = self.get_serializable_state_list(to_list=True, option='grad')
+        # print(f"max:{max(grad):.6f}, min:{min(grad):.6f}")
         opt.zero_grad()
         return grad, loss.item()
     

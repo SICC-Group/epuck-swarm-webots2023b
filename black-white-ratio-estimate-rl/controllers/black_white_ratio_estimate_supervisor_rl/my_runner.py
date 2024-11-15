@@ -6,8 +6,10 @@ import traceback
 from copy import deepcopy
 
 import wandb
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import rospy
 from std_msgs.msg import String
 
@@ -33,7 +35,7 @@ class MyRunner(BaseRunner):
             for i in range(self.num_agents)
         ]
 
-        print("\n Env-{}, Algo-{}, runs total num timesteps-{}/{}. \n".format(
+        print("Env-{}, Algo-{}, runs total num timesteps-{}/{}. \n".format(
             self.env_name, self.algorithm_name,
             self.total_train_steps, self.max_steps,
         ))
@@ -48,42 +50,20 @@ class MyRunner(BaseRunner):
     def run(self):
         # train
         env_info = self.collect_rollout(phase="train")
-        # print(env_info)
-        for k, v in env_info.items():
-            self.env_infos[k].append(v)
-        # # save
-        # if self.use_save and (self.total_train_steps - self.last_save_T) / self.save_interval >= 1:
-        #     self.last_save_T = self.total_train_steps
-        #     self.save()
-        # log
-        if self.total_train_steps > 5 and ((self.total_train_steps - self.last_log_T) / self.log_interval) >= 1:
-            self.last_log_T = self.total_train_steps
-            self.log()
-        # eval
-        if self.use_eval and ((self.total_train_steps - self.last_eval_T) / self.eval_interval) >= 1:
-            self.last_eval_T = self.total_train_steps
-            print("start evaluation")
-            self.eval()
+        print("Env-{}, Algo-{}, runs total num timesteps-{}/{}. \n".format(
+            self.env_name, self.algorithm_name,
+            self.total_train_steps, self.max_steps,
+        ))
+        self.log_env(env_info)
 
         return self.total_train_steps
     
     def eval(self):
         """Collect episodes to evaluate the policy."""
-        eval_infos = {
-            f'episode_r_{i}': [] for i in range(self.num_agents)
-        }
-        eval_infos['episode_time'] = []
-        eval_infos['ratio_estimate'] = []
-        eval_infos['exploration_rate'] = []
-        for i in range(4):  # action space
-            eval_infos[f'action_{i}'] = []
-
-        for _ in range(self.args.num_eval_episodes):
+        print("Start Evaluation")
+        for i in tqdm(range(self.args.num_eval_episodes), desc="Evaluating"):
             env_info = self.collect_rollout(phase="eval")
-            for k, v in env_info.items():
-                eval_infos[k].append(v)
-
-        self.log_env(eval_infos, suffix="eval_")
+            self.log_env(env_info, suffix="eval_", eval_count=i)
 
     def collect_rollout(self, phase="train"):
         """
@@ -92,9 +72,6 @@ class MyRunner(BaseRunner):
         :return env_info: (dict) contains information about the rollout (total rewards, etc).
         """
         assert phase in ["train", "eval"], f"phase must be either 'train' or 'eval', but got {phase}."
-        env_info = {
-            f'episode_r_{i}': 0 for i in range(self.num_agents)
-        }
         env: Epuck2Supervisor = self.env
         state = env.reset()
         map_info = env.get_map_info()
@@ -105,12 +82,13 @@ class MyRunner(BaseRunner):
         episode_dones = []
         local_step = 0
 
-        while local_step < self.episode_length and not rospy.is_shutdown():
+        while not rospy.is_shutdown():  # local_step < self.episode_length and 
             local_step += 1
             for i in range(self.num_agents):
                 agent_data = {
+                    'step': local_step,
                     'state': state[i].tolist(),
-                    'map': map_info.tolist(),
+                    'map': map_info[i].tolist(),
                     'phase': phase,
                     'total_steps': self.total_train_steps,
                     'save_dir': self.save_dir,
@@ -124,13 +102,14 @@ class MyRunner(BaseRunner):
             rate = rospy.Rate(10)  # 10Hz
             while not all(self.received_actions) and not rospy.is_shutdown():
                 rate.sleep()
-            s_, map_info_, r, done, _ = env.step(self.actions)
+            s_, map_info_, r, done, _ = env.step(self.actions, phase, self.train_count)
+            self.received_actions = [False] * self.num_agents
             for i in range(self.num_agents):
                 agent_data = {
                     'reward': float(r[i]),
                     'done': done[i],
                     'next_state': s_[i].tolist(),
-                    'next_map': map_info_.tolist(),
+                    'next_map': map_info_[i].tolist(),
                     'phase': phase,
                     'total_steps': self.total_train_steps,
                 }
@@ -138,11 +117,14 @@ class MyRunner(BaseRunner):
                 self.publishers_reward[i].publish(json.dumps(agent_data))
                 time.sleep(0.01)
 
-            episode_states.append(state)
+            # episode_states.append(state)
             # episode_map_info.append(map_info_)
             episode_actions.append(deepcopy(self.actions))
             episode_rewards.append(r)
-            episode_dones.append(done)
+            # time for local train due to the data sync
+            # if phase == "train" and len(episode_rewards) % self.args.buffer_length == 0:
+            #     time.sleep(3)
+            # episode_dones.append(done)
             
             state = s_
             map_info = map_info_
@@ -151,96 +133,112 @@ class MyRunner(BaseRunner):
                 break
         
         if phase == "train":
+            self.train_count += 1
+            img_name = f'/{phase}_{self.train_count}.jpg'
             self.total_train_steps += local_step * self.num_agents
+        elif phase == "eval":
+            self.eval_count += 1
+            img_name = f'/{phase}_{self.eval_count}.jpg'
+        env.exportImage(self.image_dir + img_name, 100)
         time.sleep(10)
-            
-        for i in range(self.num_agents):
-            env_info[f'episode_r_{i}'] = np.sum(np.array(episode_rewards)[:, i])
-        action_collections = [a for episode in episode_actions for a in episode]
-        env_info['episode_time'] = env.get_episode_time()
-        env_info['ratio_estimate'] = env.get_ratio_estimation()
-        env_info['exploration_rate'] = sum(env.env_tiles.tiles_visited) / (env.col * env.row)
-        for i in range(4):  # action space
-            env_info[f'action_{i}'] = action_collections.count(i) / len(action_collections)
+
+        env_info = {}
+        if phase == "train":
+            ratios = env.get_ratio_estimation()
+            exp_ratios = env.get_exploration_ratio()
+            for i in range(self.num_agents):
+                env_info[f'{i}_episode_r'] = np.sum(np.array(episode_rewards)[:, i])
+                env_info[f'{i}_episode_r_mean'] = np.mean(np.array(episode_rewards)[:, i])
+                env_info[f'{i}_ratio_estimate'] = ratios[i]
+                env_info[f'{i}_exploration_ratio'] = exp_ratios[i]
+            env_info['episode_steps'] = local_step
+            action_collections = [a for episode in episode_actions for a in episode]
+            env_info['global_ratio'] = env.global_ratio_estimation
+            env_info['episode_time'] = env.get_episode_time()
+            for i in range(4):  # action space
+                env_info[f'action_{i}'] = action_collections.count(i) / len(action_collections)
+        elif phase == "eval":
+            env_info['step'] = list(range(1, local_step + 1))
+            for i in range(self.num_agents):
+                env_info[f'local_ratio_{i}'] = env.local_ratio_dict[i]
+            env_info['global_ratio'] = env.global_ratio_list
         return env_info
 
     def log(self):
         """See parent class."""
-        print("\n Env-{}, Algo-{}, runs total num timesteps-{}/{}. \n".format(
-            self.env_name, self.algorithm_name,
-            self.total_train_steps, self.max_steps,
-        ))
         self.log_env(self.env_infos)
         self.log_clear()
 
     def log_clear(self):
         """See parent class."""
-        self.env_infos = {
-            f'episode_r_{i}': [] for i in range(self.num_agents)
-        }
+        self.env_infos = {}
+        for i in range(self.num_agents):
+            self.env_infos[f'{i}_episode_r'] = []
+            self.env_infos[f'{i}_episode_r_mean'] = []
+            self.env_infos[f'{i}_ratio_estimate'] = []
+            self.env_infos[f'{i}_exploration_ratio'] = []
+        self.env_infos['episode_steps'] = []
+        self.env_infos['global_ratio'] = []
         self.env_infos['episode_time'] = []
-        self.env_infos['ratio_estimate'] = []
-        self.env_infos['exploration_rate'] = []
         for i in range(4):  # action space
             self.env_infos[f'action_{i}'] = []
     
-    def log_env(self, env_info, suffix=None):
+    def log_env(self, env_info, suffix=None, eval_count=None):
         """
         Log information related to the environment.
         :param env_info: (dict) contains logging information related to the environment.
         :param suffix: (str) optional string to add to end of keys in env_info when logging. 
         """
-        data_env = []
-        data_env.append(self.total_train_steps)
-        for k, v in env_info.items():
-            # if k == 'ratio_estimate':
-            #     mean_v_each = np.mean(v, axis=0).tolist()
-            #     data_env.extend(mean_v_each)
-            #     mean_v = np.mean(mean_v_each)
-            #     std_v = np.std(mean_v_each)
-            #     data_env.append(mean_v)
-            #     data_env.append(std_v)
-            #     suffix_k = k if suffix is None else suffix + k 
-            #     print(suffix_k + " is " + str(mean_v_each))
-            #     print(suffix_k + "_mean is " + str(mean_v))
-            #     print(suffix_k + "_std is " + str(std_v))
-            #     self.tb_logger(f"{suffix_k}_mean", mean_v, self.total_train_steps)
-            #     self.tb_logger(f"{suffix_k}_std", std_v, self.total_train_steps)
-            # else:
-            if len(v) > 0:
-                v = np.mean(v)
+        if suffix == "eval_":
+            progress_filename = os.path.join(self.run_dir,f'progress_eval_{eval_count}.csv')
+            df = pd.DataFrame({'step': env_info['step']})
+            for i in range(self.num_agents):
+                df[f'local_ratio_{i}'] = env_info[f'local_ratio_{i}']
+            global_ratio_dict = dict(env_info['global_ratio'])
+            df['global_ratio'] = df['step'].map(global_ratio_dict)
+            df.to_csv(progress_filename,mode='a',header=False,index=False)
+            try:
+                self.plot_eval(env_info, eval_count)
+            except Exception as e:
+                print(f"Error in plotting eval: {e}")
+        else:
+            data_env = []
+            data_env.append(self.total_train_steps)
+            for k, v in env_info.items():
                 data_env.append(v)
-                suffix_k = k if suffix is None else suffix + k 
-                print(suffix_k + " is " + str(v))
+                suffix_k = k if suffix is None else suffix + k
+                if "ratio_estimate" in suffix_k:
+                    print(f"\033[0;31m{suffix_k} is {v}\033[0m")  # red
+                elif "exploration_ratio" in suffix_k:
+                    print(f"\033[0;32m{suffix_k} is {v}\033[0m")  # green
+                else:
+                    print(suffix_k + " is " + str(v))
                 if self.use_wandb:
                     wandb.log({suffix_k: v}, step=self.total_train_steps)
                 else:
-                    self.tb_logger(suffix_k, v, self.total_train_steps)
+                    if suffix is None:
+                        self.tb_logger(suffix_k, v, self.train_count)
+                    else:
+                        self.tb_logger(suffix_k, v, self.eval_count)
                     # self.writter.add_scalars("episode_info", {suffix_k: v}, self.total_train_steps)
-        print()
-        if suffix=="eval_":
-            progress_filename = os.path.join(self.run_dir,'progress_eval.csv')
-        else:
+            print()
             progress_filename = os.path.join(self.run_dir,'progress.csv')
-        df = pd.DataFrame([data_env])
-        df.to_csv(progress_filename,mode='a',header=False,index=False) 
-        
-    def log_train(self, policy_id, train_info):
-        """
-        Log information related to training.
-        :param policy_id: (str) policy id corresponding to the information contained in train_info.
-        :param train_info: (dict) contains logging information related to training.
-        """
-        data_env = []
-        data_env.append(self.total_train_steps)
-        for k, v in train_info.items():
-            policy_k = str(policy_id) + '/' + k
-            data_env.append(v)
-            if self.use_wandb:
-                wandb.log({policy_k: v}, step=self.total_train_steps)
-            else:
-                self.writter.add_scalars(policy_k, {policy_k: v}, self.total_train_steps)
-                
-        progress_filename = os.path.join(self.run_dir,'progress_train.csv')
-        df = pd.DataFrame([data_env])
-        df.to_csv(progress_filename,mode='a',header=False,index=False)   
+            df = pd.DataFrame([data_env])
+            df.to_csv(progress_filename,mode='a',header=False,index=False)
+
+    def plot_eval(self, env_info, eval_count):
+        plt.figure(figsize=(10, 6))
+        for i in range(self.num_agents):
+            plt.plot(env_info['step'], env_info[f'local_ratio_{i}'], label=f'local_ratio_{i}', linewidth=1.5)
+
+        x, y = zip(*env_info['global_ratio'])
+        plt.plot(x, y, label='global_ratio', marker='o', linestyle='--', linewidth=2)
+
+        plt.xlabel('step')
+        plt.ylabel('ratio')
+        plt.ylim(0, 1)
+        plt.title('local ratios and global ratio over steps')
+        plt.legend()
+        plt.grid()
+        plt.savefig(str(self.run_dir) + f'/progress_eval_{eval_count}.png')
+        plt.savefig(str(self.run_dir) + f'/progress_eval_{eval_count}.eps')

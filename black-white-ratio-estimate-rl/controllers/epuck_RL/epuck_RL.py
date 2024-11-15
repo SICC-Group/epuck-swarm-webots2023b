@@ -22,7 +22,7 @@ from config import parser
 
 class RobotController(CSVRobot):
     def __init__(self, args, save_path) -> None:
-        super().__init__(timestep=args.time_step)
+        super().__init__(timestep=args.time_step  // args.frequency_ratio)
         self.args = args
         self.save_path = save_path
         self.f_ratio = self.args.frequency_ratio
@@ -127,6 +127,7 @@ class RobotController(CSVRobot):
     
     def use_message_data(self, message):
         # action
+        # if self.robot_name in [0, "0"]: print("update action")
         action = int(message[int(self.robot_name) - 1])
         # speed = [0, 0]
         # linear_vel = self.vel_actions[action][0]
@@ -161,9 +162,9 @@ class RobotController(CSVRobot):
         try:
             while self.step(self.time_step//self.f_ratio) != -1:
                 self.handle_receiver()
-                if i % self.f_ratio == 0:
+                if (i + 1) % self.f_ratio == 0:
                     self.handle_emitter()
-                    i = 0
+                    i = -1
                 i += 1
         except Exception as e:
             print(traceback.format_exc())
