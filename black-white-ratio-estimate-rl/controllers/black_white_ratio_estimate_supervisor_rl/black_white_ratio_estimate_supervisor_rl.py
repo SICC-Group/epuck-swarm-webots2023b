@@ -415,7 +415,8 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             else:
                 return [False] * self.num_agents
         elif phase == "eval":
-            if abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference:
+            if (len(self.global_ratio_list) > 1 and
+                abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference):
                 print(f"ratio -2:{self.global_ratio_list[-2][1]}, ratio -1:{self.global_ratio_list[-1][1]}") 
                 return [True] * self.num_agents
             else:
