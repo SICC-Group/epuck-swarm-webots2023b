@@ -87,7 +87,7 @@ def main(args_):
               "device": device,
               "run_dir": run_dir,}
 
-    total_train_steps = 0
+    total_train_count = 0
     runner = Runner(config=config)
     
     progress_filename = os.path.join(run_dir,'config.csv')
@@ -120,7 +120,7 @@ def main(args_):
     
     for i in range(num_agents):
         progress_filename_train = os.path.join(run_dir,f'progress_train_{i}.csv')
-        df = pd.DataFrame(columns=['step',f'loss{i}', 'norm']) 
+        df = pd.DataFrame(columns=['step',f'loss{i}', 'norm', 'contribution']) 
         df.to_csv(progress_filename_train,index=False)
     
     # progress_filename_train = os.path.join(run_dir,'progress_train_adj.csv')
@@ -128,8 +128,8 @@ def main(args_):
     # df.to_csv(progress_filename_train,index=False)
 
     try:
-        while total_train_steps < args.max_steps:
-            total_train_steps = runner.run()
+        while total_train_count < args.max_episodes:
+            total_train_count = runner.run()
         runner.eval()
     except KeyboardInterrupt:
         print("=== {0:>8} is aborted by keyboard interrupt".format('Main'))

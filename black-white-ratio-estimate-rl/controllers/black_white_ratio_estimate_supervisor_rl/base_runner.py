@@ -6,7 +6,6 @@ import torch
 import numpy as np
 import pandas as pd
 from tensorboardX import SummaryWriter
-from tensorboard_logger import configure, log_value
 
 class BaseRunner(object):
     """Base class for training recurrent policies."""
@@ -19,8 +18,9 @@ class BaseRunner(object):
         self.env_infos = {}
         self.algorithm_name = self.args.algorithm_name
         self.env_name = self.args.env_name
-        self.max_steps = self.args.max_steps
+        self.max_episodes = self.args.max_episodes
         self.episode_length = self.args.episode_length
+        self.buffer_length = self.args.buffer_length
         self.use_wandb = self.args.use_wandb
         self.use_eval = self.args.use_eval
         self.eval_interval = self.args.eval_interval
@@ -52,8 +52,7 @@ class BaseRunner(object):
             self.log_dir = str(self.run_dir / 'logs')
             if not os.path.exists(self.log_dir):
                 os.makedirs(self.log_dir)
-            configure(self.log_dir)
-            self.tb_logger = log_value
+            self.tb_writer = SummaryWriter(self.log_dir)
 
             self.image_dir = str(self.run_dir / 'images')
             if not os.path.exists(self.image_dir):

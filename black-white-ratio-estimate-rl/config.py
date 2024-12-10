@@ -48,11 +48,11 @@ parser.add_argument('--n_training_threads', type=int,
 parser.add_argument('--use_wandb', action='store_true', default=False)
 parser.add_argument('--env_name', type=str, default="ratio_estimation")
 parser.add_argument('--algorithm_name', type=str, default="A3C")
-parser.add_argument('--max_steps', type=int, default=2000000,  #200000
+parser.add_argument('--max_episodes', type=int, default=80,  #200000
                     help="Number of env steps to train for")
 parser.add_argument('--episode_length', type=int, default=2000, #300
                     help="Max length for any episode")
-parser.add_argument('--buffer_length', type=int, default=2000)
+parser.add_argument('--buffer_length', type=int, default=5000)
 parser.add_argument('--update_ratio_steps', type=int, default=200)
 parser.add_argument('--exploration_steps', type=int, default=600,
                     help="Number of steps during which the exploration reward is emphasized."
@@ -75,12 +75,12 @@ parser.add_argument('--reward_time', type=float, default=-0.1,
 parser.add_argument('--reward_repeat', type=float, default=-1.0,)
 parser.add_argument('--reward_local_ratio', type=float, default=3.0)
 parser.add_argument('--reward_global_ratio', type=float, default=3.0)
-parser.add_argument('--lr', type=float, default=1e-4)
+parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--reward_normalize', action='store_false', default=False)
 parser.add_argument('--grad_norm_init', type=int, default=800)
-parser.add_argument('--norm_decay_steps', type=int, default=20)
+parser.add_argument('--norm_decay_steps', type=int, default=10)
 parser.add_argument('--grad_norm_min', type=float, default=10)
 
 # eval
@@ -99,3 +99,6 @@ parser.add_argument('--save_interval', type=int, default=2000,)  # 2000
 
 # log parameters
 parser.add_argument('--log_interval', type=int, default=1)  # 2000
+
+# FL parameters
+parser.add_argument('--aggregation_time', type=int, default=100)

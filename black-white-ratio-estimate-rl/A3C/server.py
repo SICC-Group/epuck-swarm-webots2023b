@@ -4,6 +4,8 @@ import time
 import datetime
 import traceback
 
+import torch
+
 from model import Model
 
 
@@ -14,13 +16,14 @@ class Server(object):
         self.port = port
         self.server.bind((self.ip, self.port))
         self.server.listen(6)
+        self.server.settimeout(None)
         self.parameters = []
         self.version = 0
 
     def accept_new_connection(self):
-        print(f"Waiting for clients, my ip is {self.ip} and my port is {self.port}")
+        # print(f"Waiting for clients, my ip is {self.ip} and my port is {self.port}")
         self.clientsocket, self.address = self.server.accept()
-        print(f"connection from {self.address} has been established!")
+        # print(f"connection from {self.address} has been established!")
     
     def get_message(self):
         full_data = b""
@@ -64,13 +67,15 @@ class Server(object):
 
 if __name__ == "__main__":
     server = Server()
+    # model_eval = torch.load("/home/fwye/workspace/epuck-swarm-webots2023b/black-white-ratio-estimate-rl/results/ratio_estimation/A3C/run37/models/version_600.pt")
+    # server.parameters = model_eval.get_serializable_state_list(to_numpy=True, option='param')
     try:
         while True:
             server.accept_new_connection()
             data, version = server.get_message()
             if data is not None:
                 params_to_worker = {
-                    "parameters": data,
+                    "parameters": data.tolist(),
                     "version": version
                 }
                 server.send_message(params_to_worker)

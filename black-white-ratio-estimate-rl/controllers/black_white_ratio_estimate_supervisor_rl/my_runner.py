@@ -37,7 +37,7 @@ class MyRunner(BaseRunner):
 
         print("Env-{}, Algo-{}, runs total num timesteps-{}/{}. \n".format(
             self.env_name, self.algorithm_name,
-            self.total_train_steps, self.max_steps,
+            self.train_count, self.max_episodes
         ))
         self.log_clear()
     
@@ -52,11 +52,11 @@ class MyRunner(BaseRunner):
         env_info = self.collect_rollout(phase="train")
         print("Env-{}, Algo-{}, runs total num timesteps-{}/{}. \n".format(
             self.env_name, self.algorithm_name,
-            self.total_train_steps, self.max_steps,
+            self.train_count, self.max_episodes
         ))
         self.log_env(env_info)
 
-        return self.total_train_steps
+        return self.train_count
     
     def eval(self):
         """Collect episodes to evaluate the policy."""
@@ -82,7 +82,7 @@ class MyRunner(BaseRunner):
         episode_dones = []
         local_step = 0
 
-        while not rospy.is_shutdown():  # local_step < self.episode_length and 
+        while not rospy.is_shutdown() and local_step < self.buffer_length:
             local_step += 1
             for i in range(self.num_agents):
                 agent_data = {
@@ -102,7 +102,7 @@ class MyRunner(BaseRunner):
             rate = rospy.Rate(10)  # 10Hz
             while not all(self.received_actions) and not rospy.is_shutdown():
                 rate.sleep()
-            s_, map_info_, r, done, _ = env.step(self.actions, phase, self.train_count)
+            s_, map_info_, r, done, c, _ = env.step(self.actions, phase, self.train_count)
             self.received_actions = [False] * self.num_agents
             for i in range(self.num_agents):
                 agent_data = {
@@ -112,6 +112,7 @@ class MyRunner(BaseRunner):
                     'next_map': map_info_[i].tolist(),
                     'phase': phase,
                     'total_steps': self.total_train_steps,
+                    'contribution': c[i],
                 }
                 # rospy.loginfo(f'Publishing data for agent_{i}: {r[i]}')
                 self.publishers_reward[i].publish(json.dumps(agent_data))
@@ -121,9 +122,6 @@ class MyRunner(BaseRunner):
             # episode_map_info.append(map_info_)
             episode_actions.append(deepcopy(self.actions))
             episode_rewards.append(r)
-            # time for local train due to the data sync
-            # if phase == "train" and len(episode_rewards) % self.args.buffer_length == 0:
-            #     time.sleep(3)
             # episode_dones.append(done)
             
             state = s_
@@ -216,11 +214,18 @@ class MyRunner(BaseRunner):
                 if self.use_wandb:
                     wandb.log({suffix_k: v}, step=self.total_train_steps)
                 else:
-                    if suffix is None:
-                        self.tb_logger(suffix_k, v, self.train_count)
+                    if "episode_r_mean" in suffix_k:
+                        self.tb_writer.add_scalar(f"episode_r_mean/{suffix_k}", v, self.train_count)
+                    elif "episode_r" in suffix_k:
+                        self.tb_writer.add_scalar(f"episode_r/{suffix_k}", v, self.train_count)
+                    elif "exploration_ratio" in suffix_k:
+                        self.tb_writer.add_scalar(f"exploration_ratio/{suffix_k}", v, self.train_count)
+                    elif "ratio_estimate" in suffix_k:
+                        self.tb_writer.add_scalar(f"ratio_estimate/{suffix_k}", v, self.train_count)
+                    elif "action" in suffix_k:
+                        self.tb_writer.add_scalar(f"action/{suffix_k}", v, self.train_count)
                     else:
-                        self.tb_logger(suffix_k, v, self.eval_count)
-                    # self.writter.add_scalars("episode_info", {suffix_k: v}, self.total_train_steps)
+                        self.tb_writer.add_scalar(suffix_k, v, self.train_count)
             print()
             progress_filename = os.path.join(self.run_dir,'progress.csv')
             df = pd.DataFrame([data_env])
@@ -242,3 +247,4 @@ class MyRunner(BaseRunner):
         plt.grid()
         plt.savefig(str(self.run_dir) + f'/progress_eval_{eval_count}.png')
         plt.savefig(str(self.run_dir) + f'/progress_eval_{eval_count}.eps')
+        plt.close()

@@ -1,10 +1,11 @@
 import math
+from typing import Union
+import traceback
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import traceback
 
 
 class Model(nn.Module):
@@ -162,17 +163,19 @@ class Model(nn.Module):
             torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1)
         )
         loss.backward()
-        norm_ = self.grad_norm if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
-        # torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
-        grad = self.get_serializable_state_list(to_list=True, option='grad')
+        if self.norm_decay_steps == 0:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
+        else:
+            norm_ = self.grad_norm if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
+        grad = self.get_serializable_state_list(to_numpy=True, option='grad')
         # print(f"max:{max(grad):.6f}, min:{min(grad):.6f}")
         opt.zero_grad()
         return grad, loss.item()
     
     def load_serializable_state_list(
         self,
-        serializable_state_list: list
+        serializable_state_list: Union[list, np.ndarray]
     ):
         if self.layer_shape == None:
             raise ValueError("layer_shape is not initialized")
@@ -185,14 +188,14 @@ class Model(nn.Module):
             pointer += num_param
 
 
-    def get_serializable_state_list(self, to_list=True, option='param'):
+    def get_serializable_state_list(self, to_numpy=True, option='param'):
         assert option in ['param', 'grad']
         if option == 'param':
             params_list = [param.view(-1) for param in self.parameters()]
         elif option == 'grad':
             params_list = [param.grad.view(-1) for param in self.parameters()]
-        if to_list:
-            return torch.cat(params_list).tolist()
+        if to_numpy:
+            return torch.cat(params_list).detach().numpy()
         else:
             return torch.cat(params_list)
 
