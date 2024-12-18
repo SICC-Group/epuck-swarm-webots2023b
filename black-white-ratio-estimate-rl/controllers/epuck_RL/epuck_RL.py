@@ -61,10 +61,10 @@ class RobotController(CSVRobot):
         self.rotation = []  # x, y, z, w
         self.gs_values = []
 
-        self.byz_robots = random.sample(
-            list(range(self.num_agents)), self.args.byz_num)
+        # self.byz_robots = random.sample(
+        #     list(range(self.num_agents)), self.args.byz_num)
         # self.byz_robots = [0, 1]
-        self.byz_style = self.args.byz_style
+        # self.byz_style = self.args.byz_style
 
         # self.group_number = self.args.group_number
         # self.groups = {i: [] for i in range(self.group_number)}

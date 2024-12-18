@@ -19,7 +19,6 @@ class BaseRunner(object):
         self.algorithm_name = self.args.algorithm_name
         self.env_name = self.args.env_name
         self.max_episodes = self.args.max_episodes
-        self.episode_length = self.args.episode_length
         self.buffer_length = self.args.buffer_length
         self.use_wandb = self.args.use_wandb
         self.use_eval = self.args.use_eval
@@ -61,6 +60,10 @@ class BaseRunner(object):
             self.save_dir = str(self.run_dir / 'models')
             if not os.path.exists(self.save_dir):
                 os.makedirs(self.save_dir)
+            
+            self.eval_dir = str(self.run_dir / 'eval')
+            if not os.path.exists(self.eval_dir):
+                os.makedirs(self.eval_dir)
         
         
     def run(self):

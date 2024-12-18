@@ -21,10 +21,12 @@ sys.path.append(exp_path)
 from config import parser
 
 class LocalMap:
-    def __init__(self, col, row, id, threshold=0.04):
+    def __init__(self, col, row, id, byz_robots, byz_style, threshold=0.04):
         self.col = col
         self.row = row
         self.id = id
+        self.byz_robots = byz_robots
+        self.byz_style = byz_style
         self.threshold = threshold
         self.black_count = 0
         self.white_count = 0
@@ -50,7 +52,16 @@ class LocalMap:
 
     def get_ratio(self):
         try:
-            return self.black_count / (self.black_count + self.white_count)
+            if self.id in self.byz_robots:
+                if self.byz_style == 0:
+                    r = 0
+                elif self.byz_style == 1:
+                    r = 1
+                else:
+                    r = random.uniform(0,1)
+                return r
+            else:
+                return self.black_count / (self.black_count + self.white_count)
         except ZeroDivisionError:
             # print(f"agent {self.id} has no visited tiles - zero division error")
             return -1
@@ -58,18 +69,19 @@ class LocalMap:
 
 class Epuck2Supervisor(CSVSupervisorEnv):
     def __init__(self, args, save_path, col, row) -> None:
-        super().__init__(timestep=args.time_step)
+        super().__init__(timestep=args.time_step // args.frequency_ratio)
         self.args = args
         self.save_path = save_path
         self.col, self.row = col, row
         self.start_time = 0
         self.num_agents = self.args.num_agents
         self.ps_threshold = self.args.ps_threshold
-        self.dist_threshold = self.args.dist_threshold
         self.ranger_robots = list(range(self.args.ranger_robots))
         self.comm_ranges = [
             self.args.range1 if id in self.ranger_robots else self.args.range0
             for id in range(self.num_agents)]
+        self.byz_robots = [] if self.args.byz_num == 0 else list(range(self.num_agents))[-self.args.byz_num:]
+        self.byz_style = self.args.byz_style
         
         self.group_number = self.args.group_number
         self.groups = {i: [] for i in range(self.group_number)}
@@ -84,8 +96,11 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.global_ratio_estimation = 0
         self.is_update_global_ratio = False
         self.update_count = 0
+        self.global_reward_total = 0
+        self.global_reward_last = 0
+        self.aggregation_count = 0
         self.local_maps = [
-            LocalMap(self.col, self.row, i, self.args.center_threshold)
+            LocalMap(self.col, self.row, i, self.byz_robots, self.byz_style, self.args.center_threshold)
             for i in range(self.num_agents)]
         self.exploration_ratios = None  # exploration ratio for all agents
         self.local_ratios = None  # local ratio estimation for all 
@@ -95,6 +110,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         # print info
         # print("time_step: ", self.time_step)
         print("========== supervisor info ==========")
+        print(f"byzantine_robots: {self.byz_robots}")
         print(f"groups: {self.groups}")
         print(f"swarm: {self.swarm}")
         self.start_flag = True
@@ -158,8 +174,8 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         offset_x = -0.1 * self.row / 2 - 0.05
         offset_y = -0.1 * self.col / 2 - 0.05
         self.x_max, self.x_min, self.y_max, self.y_min= (
-            offset_x + 0.1 * self.row + self.dist_threshold, offset_x + 0.1 * 1 - self.dist_threshold,
-            offset_y + 0.1 * self.col + self.dist_threshold, offset_y + 0.1 * 1 - self.dist_threshold
+            offset_x + 0.1 * (self.row - 1), offset_x + 0.1 * 2,
+            offset_y + 0.1 * (self.col - 1), offset_y + 0.1 * 2
         )
         print(f"x_max: {self.x_max}, x_min: {self.x_min}, y_max: {self.y_max}, y_min: {self.y_min}")
         tiles_list = [
@@ -295,11 +311,12 @@ class Epuck2Supervisor(CSVSupervisorEnv):
 
     def init_combinations(self):
         self.combinations = {}
-        for i in range(self.num_agents):
-            remaining_agents = [x for x in range(self.num_agents) if x != i]
-            comb_num_agents_minus_1 = list(combinations(remaining_agents, self.num_agents - 1))
-            comb_num_agents_minus_2 = list(combinations(remaining_agents, self.num_agents - 2))
-            self.combinations[i] = [list(c) for c in (comb_num_agents_minus_1 + comb_num_agents_minus_2)]
+        if self.num_agents > 2:
+            for i in range(self.num_agents):
+                remaining_agents = [x for x in range(self.num_agents) if x != i]
+                comb_num_agents_minus_1 = list(combinations(remaining_agents, self.num_agents - 1))
+                comb_num_agents_minus_2 = list(combinations(remaining_agents, self.num_agents - 2))
+                self.combinations[i] = [list(c) for c in (comb_num_agents_minus_1 + comb_num_agents_minus_2)]
     
     def step(self, action, phase, train_count):
         self.handle_emitter(action)
@@ -404,12 +421,15 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             ratio_r += self.reward_global_ratio * (
                 1 - abs(self.global_ratio_estimation - self.args.black_ratio)
             )
+            self.global_reward_total += self.reward_global_ratio * (
+                1 - abs(self.global_ratio_estimation - self.args.black_ratio)
+            )
+            self.global_reward_last = self.reward_global_ratio * (
+                1 - abs(self.global_ratio_estimation - self.args.black_ratio)
+            )
+            self.aggregation_count += 1
             self.is_update_global_ratio = False
         
-        # if self.steps < self.args.exploration_steps:
-        #     rewards = 0.8 * exploration_r + 0.2 * ratio_r
-        # else:
-        #     rewards = 0.2 * exploration_r + 0.8 * ratio_r
         return exploration_r + ratio_r
     
     def is_done(self, phase, train_count):
@@ -418,7 +438,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         # if (all([r > self.args.done_exploration for r in self.exploration_ratios])and 
         #     abs(self.global_ratio_list[1] - self.global_ratio_list[0]) < 0.01):
         if phase == "train":
-            exploration = self.args.done_exploration - 0.005 * train_count
+            exploration = self.args.done_exploration - 0.01 * train_count
             if (np.mean(self.exploration_ratios) > max(exploration, self.args.min_exploration) and 
                 abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference):
                 print(f"ratio -2:{self.global_ratio_list[-2][1]}, ratio -1:{self.global_ratio_list[-1][1]}") 
@@ -464,12 +484,6 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             robot.getField('translation').setSFVec3f(epuck_default_pos)
             rotation_angle = random.uniform(-np.pi, np.pi)
             robot.getField('rotation').setSFRotation([0, 0, 1, rotation_angle])
-        
-        # for start, robot in zip(starts, self.robots):
-        #     epuck_default_pos = robot.getField('translation').getSFVec3f()
-        #     epuck_default_pos[:2] = start
-        #     robot.getField('translation').setSFVec3f(epuck_default_pos)
-        #     robot.getField('rotation').setSFRotation([0, 0, 1, random.uniform(-np.pi, np.pi)])
     
     def reset(self):
         if self.start_flag:
@@ -479,6 +493,9 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             self.start_flag = False
         self.steps = 0
         self.global_ratio_estimation = 0
+        self.global_reward_total = 0
+        self.global_reward_last = 0
+        self.aggregation_count = 0
         self.update_count = 0
         self.global_ratio_list.clear()
         self.local_ratio_dict = {i: [] for i in range(self.num_agents)}
@@ -504,44 +521,54 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         return init_state
     
     def _update_global_ratio(self, phase):
-        if phase == "train":
-            shapley_value = self.get_shapley_value()
-            selected_idx = np.argsort(shapley_value)[-int(2 / 3 * self.num_agents):]
-            for i in selected_idx:
-                delta = self.local_ratios[i] - self.global_ratio_estimation
-                self.update_count += 1
-                self.global_ratio_estimation += delta / self.update_count
-        
-        elif phase == "eval":
-            if self.update_count == 0:
-                for r in self.local_ratios:
-                    delta = r - self.global_ratio_estimation
-                    self.update_count += 1
-                    self.global_ratio_estimation += delta / self.update_count
-            else:
-                ok_count = 0
-                for r in self.local_ratios:
-                    delta = r - self.global_ratio_estimation
-                    if abs(delta) < 0.1:
-                        ok_count += 1
-                        self.update_count += 1
-                        self.global_ratio_estimation += delta / self.update_count
-                if ok_count == 0:
-                    for r in self.local_ratios:
-                        delta = r - self.global_ratio_estimation
-                        self.update_count += 1
-                        self.global_ratio_estimation += delta / self.update_count
-        self.global_ratio_list.append((self.steps, self.global_ratio_estimation))
-        return shapley_value if phase == "train" else [0] * self.num_agents
+        shapley_value = [0] * self.num_agents
 
-    def get_shapley_value(self) -> np.ndarray:
+        if self.args.ratio_update_method == "threshold":
+            selected_idx = self._threshold_select()
+        elif self.args.ratio_update_method == "shapley":
+            shapley_value = self.get_shapley_value(phase)
+            selected_idx = np.argsort(shapley_value)[-int(2 / 3 * self.num_agents):]
+        elif self.args.ratio_update_method == "all":
+            selected_idx = list(range(self.num_agents))
+        
+        for i in selected_idx:
+            delta = self.local_ratios[i] - self.global_ratio_estimation
+            self.update_count += 1
+            self.global_ratio_estimation += delta / self.update_count
+        self.global_ratio_list.append((self.steps, self.global_ratio_estimation))
+        
+        return shapley_value
+
+    def _threshold_select(self):
+        if self.update_count == 0:
+            selected_idx = list(range(self.num_agents))
+        else:
+            selected_idx = []
+            for idx, r in enumerate(self.local_ratios):
+                delta = r - self.global_ratio_estimation
+                if abs(delta) < 0.1:
+                    selected_idx.append(idx)
+            if len(selected_idx) == 0:
+                selected_idx = list(range(self.num_agents))
+            return selected_idx
+    
+    def get_shapley_value(self, phase) -> np.ndarray:
         shapley_values = [0] * self.num_agents
-        for i in range(self.num_agents):
-            for combination in self.combinations[i]:
-                global_reward_with_i = self.get_union_reward(combination, i)
-                global_reward_without_i = self.get_union_reward(combination, -1)
-                shapley_values[i] += global_reward_with_i - global_reward_without_i
-            shapley_values[i] /= len(self.combinations[i])
+        if phase == "train":
+            for i in range(self.num_agents):
+                for combination in self.combinations[i]:
+                    global_reward_with_i = self.get_union_reward(combination, i)
+                    global_reward_without_i = self.get_union_reward(combination, -1)
+                    shapley_values[i] += global_reward_with_i - global_reward_without_i
+                shapley_values[i] /= len(self.combinations[i])
+        elif phase == "eval":
+            tmp_local_ratios = np.array(self.local_ratios)
+            for i in range(self.num_agents):
+                for combination in self.combinations[i]:
+                    consistency_without_i = -np.var(tmp_local_ratios[combination])
+                    consistency_with_i = -np.var(tmp_local_ratios[combination + [i]])
+                    shapley_values[i] += consistency_with_i - consistency_without_i
+                shapley_values[i] /= len(self.combinations[i])
         return shapley_values
     
     def get_union_reward(self, combination: list, agent: int) -> float:

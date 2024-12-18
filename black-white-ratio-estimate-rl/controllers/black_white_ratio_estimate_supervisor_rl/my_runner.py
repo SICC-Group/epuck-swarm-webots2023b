@@ -61,7 +61,15 @@ class MyRunner(BaseRunner):
     def eval(self):
         """Collect episodes to evaluate the policy."""
         print("Start Evaluation")
+        columns = ['step']
+        columns.extend([f'local_ratio_{i}' for i in range(self.num_agents)])
+        columns.append('global_ratio')
         for i in tqdm(range(self.args.num_eval_episodes), desc="Evaluating"):
+            progress_filename = os.path.join(
+                self.eval_dir,f'progress_eval_{i}_{self.args.ratio_update_method}.csv'
+            )
+            df = pd.DataFrame(columns=columns)
+            df.to_csv(progress_filename,index=False)
             env_info = self.collect_rollout(phase="eval")
             self.log_env(env_info, suffix="eval_", eval_count=i)
 
@@ -144,6 +152,9 @@ class MyRunner(BaseRunner):
         if phase == "train":
             ratios = env.get_ratio_estimation()
             exp_ratios = env.get_exploration_ratio()
+            env_info['global_r_total'] = env.global_reward_total
+            env_info['global_r_mean'] = env.global_reward_total / env.aggregation_count
+            env_info['global_r_last'] = env.global_reward_last
             for i in range(self.num_agents):
                 env_info[f'{i}_episode_r'] = np.sum(np.array(episode_rewards)[:, i])
                 env_info[f'{i}_episode_r_mean'] = np.mean(np.array(episode_rewards)[:, i])
@@ -155,6 +166,7 @@ class MyRunner(BaseRunner):
             env_info['episode_time'] = env.get_episode_time()
             for i in range(4):  # action space
                 env_info[f'action_{i}'] = action_collections.count(i) / len(action_collections)
+            env_info['convergence'] = env.global_ratio_list
         elif phase == "eval":
             env_info['step'] = list(range(1, local_step + 1))
             for i in range(self.num_agents):
@@ -188,7 +200,9 @@ class MyRunner(BaseRunner):
         :param suffix: (str) optional string to add to end of keys in env_info when logging. 
         """
         if suffix == "eval_":
-            progress_filename = os.path.join(self.run_dir,f'progress_eval_{eval_count}.csv')
+            progress_filename = os.path.join(
+                self.eval_dir,f'progress_eval_{eval_count}_{self.args.ratio_update_method}.csv'
+            )
             df = pd.DataFrame({'step': env_info['step']})
             for i in range(self.num_agents):
                 df[f'local_ratio_{i}'] = env_info[f'local_ratio_{i}']
@@ -203,14 +217,15 @@ class MyRunner(BaseRunner):
             data_env = []
             data_env.append(self.total_train_steps)
             for k, v in env_info.items():
-                data_env.append(v)
                 suffix_k = k if suffix is None else suffix + k
-                if "ratio_estimate" in suffix_k:
-                    print(f"\033[0;31m{suffix_k} is {v}\033[0m")  # red
-                elif "exploration_ratio" in suffix_k:
-                    print(f"\033[0;32m{suffix_k} is {v}\033[0m")  # green
-                else:
-                    print(suffix_k + " is " + str(v))
+                if k != "convergence":
+                    data_env.append(v)
+                    if "ratio_estimate" in suffix_k:
+                        print(f"\033[0;31m{suffix_k} is {v}\033[0m")  # red
+                    elif "exploration_ratio" in suffix_k:
+                        print(f"\033[0;32m{suffix_k} is {v}\033[0m")  # green
+                    else:
+                        print(suffix_k + " is " + str(v))
                 if self.use_wandb:
                     wandb.log({suffix_k: v}, step=self.total_train_steps)
                 else:
@@ -224,6 +239,11 @@ class MyRunner(BaseRunner):
                         self.tb_writer.add_scalar(f"ratio_estimate/{suffix_k}", v, self.train_count)
                     elif "action" in suffix_k:
                         self.tb_writer.add_scalar(f"action/{suffix_k}", v, self.train_count)
+                    elif "global_r" in suffix_k:
+                        self.tb_writer.add_scalar(f"global_r/{suffix_k}", v, self.train_count)
+                    elif "convergence" in suffix_k:
+                        for s, r in v:
+                            self.tb_writer.add_scalar(f"convergence/{self.train_count}", r, s)
                     else:
                         self.tb_writer.add_scalar(suffix_k, v, self.train_count)
             print()
@@ -241,10 +261,10 @@ class MyRunner(BaseRunner):
 
         plt.xlabel('step')
         plt.ylabel('ratio')
-        plt.ylim(0, 1)
+        plt.ylim(-0.02, 1.02)
         plt.title('local ratios and global ratio over steps')
         plt.legend()
         plt.grid()
-        plt.savefig(str(self.run_dir) + f'/progress_eval_{eval_count}.png')
-        plt.savefig(str(self.run_dir) + f'/progress_eval_{eval_count}.eps')
+        plt.savefig(str(self.eval_dir) + f'/progress_eval_{eval_count}_{self.args.ratio_update_method}.png')
+        plt.savefig(str(self.eval_dir) + f'/progress_eval_{eval_count}_{self.args.ratio_update_method}.eps')
         plt.close()

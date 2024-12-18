@@ -8,7 +8,7 @@ parser.add_argument("--num_agents", type=int, default=6,
                   help="number of robots in the swarm")
 parser.add_argument("--byz_num", type=int, default=0,
                   help="number of byzantine robots in the swarm")
-parser.add_argument("--byz_style", type=int, default=2,
+parser.add_argument("--byz_style", type=int, default=0,
                   help="Specify the behavior value. "
                   "If the value is 0, Byzantine behavior will continuously output 0. "
                   "If the value is 1, Byzantine behavior will continuously output 1. "
@@ -48,24 +48,24 @@ parser.add_argument('--n_training_threads', type=int,
 parser.add_argument('--use_wandb', action='store_true', default=False)
 parser.add_argument('--env_name', type=str, default="ratio_estimation")
 parser.add_argument('--algorithm_name', type=str, default="A3C")
-parser.add_argument('--max_episodes', type=int, default=80,  #200000
+parser.add_argument('--max_episodes', type=int, default=80,
                     help="Number of env steps to train for")
-parser.add_argument('--episode_length', type=int, default=2000, #300
-                    help="Max length for any episode")
 parser.add_argument('--buffer_length', type=int, default=5000)
 parser.add_argument('--update_ratio_steps', type=int, default=200)
 parser.add_argument('--exploration_steps', type=int, default=600,
                     help="Number of steps during which the exploration reward is emphasized."
                     "After this, the ratio_difference reward becomes more significant.")
 parser.add_argument('--model_dir', type=str, default=None)
+parser.add_argument('--ratio_update_method', type=str, default='shapley',
+                    choices=['threshold', 'shapley', 'all'],
+                    help="The method to update the global ratio in evaluation"
+                    "options: threshold, shapley, all")
 
 # RL info
-parser.add_argument('--dist_threshold', type=float, default=0.001,
-                    help="used in distance threshold for avoiding bounds")
 parser.add_argument("--collision_distance", type=float, default=0.1)
 parser.add_argument('--done_exploration', type=float, default=0.5)
 parser.add_argument('--min_exploration', type=float, default=0.3)
-parser.add_argument('--done_ratio_difference', type=float, default=0.0003)
+parser.add_argument('--done_ratio_difference', type=float, default=0.001)
 parser.add_argument("--reward_collision", type=float, default=-1.0)
 parser.add_argument("--reward_exploration", type=float, default=5.0,
                     help="reward for the exploration of each tile")
@@ -81,14 +81,14 @@ parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--reward_normalize', action='store_false', default=False)
 parser.add_argument('--grad_norm_init', type=int, default=800)
 parser.add_argument('--norm_decay_steps', type=int, default=10)
-parser.add_argument('--grad_norm_min', type=float, default=10)
+parser.add_argument('--grad_norm_min', type=float, default=100)
 
 # eval
 parser.add_argument('--use_eval', action='store_true',
                     default=True, help="Whether to conduct the evaluation")
 parser.add_argument('--eval_interval', type=int,  default=5,  # 2000
                     help="After how many episodes the model should be evaled")
-parser.add_argument('--num_eval_episodes', type=int, default=5, #  5
+parser.add_argument('--num_eval_episodes', type=int, default=10,
                     help="How many episodes to collect for each eval")
 parser.add_argument('--eval_sync', default=True, action='store_false')
 

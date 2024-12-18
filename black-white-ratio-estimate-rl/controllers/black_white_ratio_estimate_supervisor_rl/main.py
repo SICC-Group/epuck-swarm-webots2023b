@@ -96,6 +96,9 @@ def main(args_):
     
     columns = ['step']
     for i in range(num_agents):
+        columns.append('global_r_total')
+        columns.append('global_r_mean')
+        columns.append('global_r_last')
         columns.append(f'{i}_episode_r')
         columns.append(f'{i}_episode_r_mean')
         columns.append(f'{i}_ratio_estimate')
@@ -109,14 +112,6 @@ def main(args_):
     progress_filename = os.path.join(run_dir,'progress.csv')
     df = pd.DataFrame(columns=columns)
     df.to_csv(progress_filename,index=False)
-    
-    columns = ['step']
-    columns.extend([f'local_ratio_{i}' for i in range(num_agents)])
-    columns.append('global_ratio')
-    for i in range(args.num_eval_episodes):
-        progress_filename = os.path.join(run_dir,f'progress_eval_{i}.csv')
-        df = pd.DataFrame(columns=columns)
-        df.to_csv(progress_filename,index=False)
     
     for i in range(num_agents):
         progress_filename_train = os.path.join(run_dir,f'progress_train_{i}.csv')

@@ -5,6 +5,7 @@ import time, datetime
 import multiprocessing as mp
 import sys, os
 import traceback
+import random
 from copy import deepcopy
 from collections import deque
 from itertools import islice
@@ -114,12 +115,17 @@ class Worker:
         self.ip, self.port = "172.18.0.1", 9801
         # self.as_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         # self.as_client.connect(("172.18.0.1", 9801))
+        self.last_action = None
         self.steps = 0
-        self.model = Model(
-            11, 4, self.args.col, self.args.row, device,
-            self.args.grad_norm_init, self.args.norm_decay_steps,
-            self.args.grad_norm_min, self.args.reward_normalize
-        )
+        if self.args.model_dir is None:
+            self.model = Model(
+                11, 4, self.args.col, self.args.row, device,
+                self.args.grad_norm_init, self.args.norm_decay_steps,
+                self.args.grad_norm_min, self.args.reward_normalize
+            )
+        else:
+            self.model = torch.load(self.args.model_dir)
+            print("lode model successfully")
         self.model = self.model.to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
         self.buffer_s, self.next_s = [], None
@@ -161,21 +167,30 @@ class Worker:
             back_obstacle = any(
                 value > self.args.ps_threshold for value in ps_values[3:-3]
             )
-            if front_obstacle:
-                action = 3
-            elif right_obstacle:
-                action = 1
-            elif left_obstacle:
-                action = 2
-            elif back_obstacle:
-                action = 0
+            if self.last_action == 3:
+                action = random.choice([1, 2])  # turn right or left
+                self.last_action = None
             else:
-                state = self.normalize_ps_values_of_state(agent_data['state'])
-                with torch.no_grad():
-                    action = self.model.choose_action(
-                        torch.tensor(state, dtype=torch.float, device=device),
-                        torch.tensor(agent_data['map'], dtype=torch.float, device=device)
-                    )
+                if front_obstacle:
+                    action = 3
+                    self.last_action = 3
+                elif right_obstacle:
+                    action = 1
+                    self.last_action = None
+                elif left_obstacle:
+                    action = 2
+                    self.last_action = None
+                elif back_obstacle:
+                    action = 0
+                    self.last_action = None
+                else:
+                    state = self.normalize_ps_values_of_state(agent_data['state'])
+                    with torch.no_grad():
+                        action = self.model.choose_action(
+                            torch.tensor(state, dtype=torch.float, device=device),
+                            torch.tensor(agent_data['map'], dtype=torch.float, device=device)
+                        )
+                    self.last_action = None
             message = json.dumps(action)
             # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
             self.publisher.publish(message)
