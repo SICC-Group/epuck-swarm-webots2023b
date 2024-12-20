@@ -111,6 +111,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         # print("time_step: ", self.time_step)
         print("========== supervisor info ==========")
         print(f"byzantine_robots: {self.byz_robots}")
+        print(f"update method: {self.args.ratio_update_method}")
         print(f"groups: {self.groups}")
         print(f"swarm: {self.swarm}")
         self.start_flag = True
@@ -550,7 +551,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
                     selected_idx.append(idx)
             if len(selected_idx) == 0:
                 selected_idx = list(range(self.num_agents))
-            return selected_idx
+        return selected_idx
     
     def get_shapley_value(self, phase) -> np.ndarray:
         shapley_values = [0] * self.num_agents
