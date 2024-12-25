@@ -95,10 +95,10 @@ def main(args_):
     df.to_csv(progress_filename,index=False)
     
     columns = ['step']
+    columns.append('global_r_total')
+    columns.append('global_r_mean')
+    columns.append('global_r_last')
     for i in range(num_agents):
-        columns.append('global_r_total')
-        columns.append('global_r_mean')
-        columns.append('global_r_last')
         columns.append(f'{i}_episode_r')
         columns.append(f'{i}_episode_r_mean')
         columns.append(f'{i}_ratio_estimate')
