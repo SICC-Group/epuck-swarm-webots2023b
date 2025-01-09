@@ -10,8 +10,7 @@ import numpy as np
 
 class Model(nn.Module):
     def __init__(
-        self, s_dim, a_dim, col, row, device,
-        grad_norm_init, norm_decay_steps, grad_norm_min, 
+        self, s_dim, a_dim, col, row, device, 
         reward_normalize, continuous=False
     ):
         super().__init__()
@@ -19,9 +18,6 @@ class Model(nn.Module):
         self.a_dim = a_dim
         self.col = col
         self.row = row
-        self.grad_norm = grad_norm_init
-        self.norm_decay_steps = norm_decay_steps
-        self.grad_norm_min = grad_norm_min
         self.reward_normalize = reward_normalize
         self.device = device
         self.continuous = continuous
@@ -163,13 +159,12 @@ class Model(nn.Module):
             torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1)
         )
         loss.backward()
-        if self.norm_decay_steps == 0:
-            torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
-        else:
-            norm_ = self.grad_norm if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
-            torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
+        # if self.norm_decay_steps == 0:
+        #     torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
+        # else:
+        #     norm_ = self.grad_norm if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
+        #     torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
         grad = self.get_serializable_state_list(to_numpy=True, option='grad')
-        # print(f"max:{max(grad):.6f}, min:{min(grad):.6f}")
         opt.zero_grad()
         return grad, loss.item()
     
@@ -195,7 +190,7 @@ class Model(nn.Module):
         elif option == 'grad':
             params_list = [param.grad.view(-1) for param in self.parameters()]
         if to_numpy:
-            return torch.cat(params_list).detach().numpy()
+            return torch.cat(params_list).detach().cpu().numpy()
         else:
             return torch.cat(params_list)
 

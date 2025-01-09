@@ -1,7 +1,6 @@
 import os
 import time
 
-import wandb
 import torch
 import numpy as np
 import pandas as pd
@@ -21,6 +20,7 @@ class BaseRunner(object):
         self.max_episodes = self.args.max_episodes
         self.buffer_length = self.args.buffer_length
         self.use_wandb = self.args.use_wandb
+        if self.use_wandb: import wandb
         self.use_eval = self.args.use_eval
         self.eval_interval = self.args.eval_interval
         self.save_interval = self.args.save_interval

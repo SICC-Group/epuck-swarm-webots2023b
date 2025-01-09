@@ -5,7 +5,6 @@ import time
 import traceback
 from copy import deepcopy
 
-import wandb
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
@@ -128,7 +127,10 @@ class MyRunner(BaseRunner):
 
             # episode_states.append(state)
             # episode_map_info.append(map_info_)
-            episode_actions.append(deepcopy(self.actions))
+            copy_action = deepcopy(self.actions)
+            if self.args.byz_num > 0 and "action" in self.args.byz_style:
+                copy_action = copy_action[:-self.args.byz_num]
+            episode_actions.append(copy_action)
             episode_rewards.append(r)
             # episode_dones.append(done)
             
@@ -138,14 +140,14 @@ class MyRunner(BaseRunner):
             if all(done):
                 break
         
-        if phase == "train":
-            self.train_count += 1
-            img_name = f'/{phase}_{self.train_count}.jpg'
-            self.total_train_steps += local_step * self.num_agents
-        elif phase == "eval":
-            self.eval_count += 1
-            img_name = f'/{phase}_{self.eval_count}.jpg'
-        env.exportImage(self.image_dir + img_name, 100)
+        # if phase == "train":
+        #     self.train_count += 1
+        #     img_name = f'/{phase}_{self.train_count}.jpg'
+        #     self.total_train_steps += local_step * self.num_agents
+        # elif phase == "eval":
+        #     self.eval_count += 1
+        #     img_name = f'/{phase}_{self.eval_count}.jpg'
+        # env.exportImage(self.image_dir + img_name, 100)
         time.sleep(10)
 
         env_info = {}
@@ -227,6 +229,7 @@ class MyRunner(BaseRunner):
                     else:
                         print(suffix_k + " is " + str(v))
                 if self.use_wandb:
+                    import wandb
                     wandb.log({suffix_k: v}, step=self.total_train_steps)
                 else:
                     if "episode_r_mean" in suffix_k:

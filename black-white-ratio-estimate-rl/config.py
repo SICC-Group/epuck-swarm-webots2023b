@@ -8,11 +8,11 @@ parser.add_argument("--num_agents", type=int, default=6,
                   help="number of robots in the swarm")
 parser.add_argument("--byz_num", type=int, default=0,
                   help="number of byzantine robots in the swarm")
-parser.add_argument("--byz_style", type=int, default=0,
-                  help="Specify the behavior value. "
-                  "If the value is 0, Byzantine behavior will continuously output 0. "
-                  "If the value is 1, Byzantine behavior will continuously output 1. "
-                  "If the value is anything else, Byzantine behavior will output a random value.")
+parser.add_argument("--byz_style", type=str, default="", 
+                    choices=["", "ratio-1", "ratio-0.6", "ratio-0.3", "ratio-0", "ratio-r",
+                             "action-0", "action-1", "action-2", "action-3",
+                             "grad-noise", "grad-signflip", "grad-alie",
+                             "grad-ipm-3", "grad-ipm-5", "grad-ipm-7"])
 parser.add_argument("--range0", type=float, default=0.25,
                   help="communication range for common robots")
 parser.add_argument("--range1", type=float, default=1,
@@ -51,17 +51,14 @@ parser.add_argument('--algorithm_name', type=str, default="A3C")
 parser.add_argument('--max_episodes', type=int, default=80,
                     help="Number of env steps to train for")
 parser.add_argument('--buffer_length', type=int, default=5000)
-parser.add_argument('--update_ratio_steps', type=int, default=200)
-parser.add_argument('--exploration_steps', type=int, default=600,
-                    help="Number of steps during which the exploration reward is emphasized."
-                    "After this, the ratio_difference reward becomes more significant.")
+parser.add_argument('--update_ratio_steps', type=int, default=100)
 parser.add_argument('--model_dir', type=str, default=None)
-parser.add_argument('--ratio_update_method', type=str, default='shapley',
+parser.add_argument('--ratio_update_method', type=str, default='all',
                     choices=['threshold', 'shapley', 'all'],
                     help="The method to update the global ratio in evaluation"
                     "options: threshold, shapley, all")
 
-# RL info
+# FRL info
 parser.add_argument("--collision_distance", type=float, default=0.1)
 parser.add_argument('--done_exploration', type=float, default=0.5)
 parser.add_argument('--min_exploration', type=float, default=0.3)
@@ -79,9 +76,13 @@ parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--reward_normalize', action='store_false', default=False)
+
 parser.add_argument('--grad_norm_init', type=int, default=800)
-parser.add_argument('--norm_decay_steps', type=int, default=10)
+parser.add_argument('--norm_decay_steps', type=int, default=12)
 parser.add_argument('--grad_norm_min', type=float, default=100)
+parser.add_argument('--grad_aggregation', type=str, default="mean", 
+                    choices=["mean", "median", "multikrum", "clustering", "signguard"])
+parser.add_argument('--aggregation_time', type=int, default=100)
 
 # eval
 parser.add_argument('--use_eval', action='store_true',
@@ -99,6 +100,3 @@ parser.add_argument('--save_interval', type=int, default=2000,)  # 2000
 
 # log parameters
 parser.add_argument('--log_interval', type=int, default=1)  # 2000
-
-# FL parameters
-parser.add_argument('--aggregation_time', type=int, default=100)

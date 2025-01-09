@@ -1,16 +1,16 @@
 import sys
 import os
 import socket
-import setproctitle
+# import setproctitle
 sys.path.append("/usr/local/webots/lib/controller/python")
 sys.path.append("/usr/local/webots/lib/controller/python/controller")
 sys.path.append('../')
+os.environ['WEBOTS_HOME'] = '/usr/local/webots'
 # sys.path.append('../..')
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
-import wandb
 import torch
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +46,8 @@ def main(args_):
         os.makedirs(str(run_dir))
 
     if args.use_wandb:
-        # init wandb
+        # init wandb  
+        import wandb
         run = wandb.init(config=args,
                          project=args.env_name,
                          entity=args.user_name,

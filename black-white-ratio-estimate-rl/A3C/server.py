@@ -12,7 +12,7 @@ from model import Model
 class Server(object):
     def __init__(self, port=9801) -> None:
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.ip = "172.18.0.1"
+        self.ip = "localhost"
         self.port = port
         self.server.bind((self.ip, self.port))
         self.server.listen(6)

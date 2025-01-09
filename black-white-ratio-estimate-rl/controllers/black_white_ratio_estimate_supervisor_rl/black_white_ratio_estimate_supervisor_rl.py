@@ -8,11 +8,11 @@ import time
 from datetime import datetime
 
 from deepbots.supervisor.controllers.csv_supervisor_env import CSVSupervisorEnv
-from gym.spaces import Discrete
+# from gym.spaces import Discrete
 sys.path.append("/usr/local/webots/lib/controller/python")
 os.environ['WEBOTS_HOME'] = '/usr/local/webots'
 from controller import Supervisor, Robot
-from scipy.spatial.transform import Rotation as R
+# from scipy.spatial.transform import Rotation as R
 import numpy as np
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -52,11 +52,10 @@ class LocalMap:
 
     def get_ratio(self):
         try:
-            if self.id in self.byz_robots:
-                if self.byz_style == 0:
-                    r = 0
-                elif self.byz_style == 1:
-                    r = 1
+            if self.id in self.byz_robots and "ratio" in self.byz_style:
+                style = self.byz_style.split("-")[1]
+                if style.isdigit():
+                    r = float(style)
                 else:
                     r = random.uniform(0,1)
                 return r
@@ -351,8 +350,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             [epuck_pos, rotation_angle, ps_sensor_values], axis=1
         )
         contributions = [0] * self.num_agents
-        if ((self.steps <= 2000 and self.steps % self.args.update_ratio_steps == 0) or 
-            (self.steps > 2000 and self.steps % (self.args.update_ratio_steps // 2) == 0)):
+        if self.steps % self.args.update_ratio_steps == 0:
             contributions = self._update_global_ratio(phase)
             self.is_update_global_ratio = True
         if self.steps % 2000 == 0:
