@@ -29,7 +29,7 @@ class Leader(Server):
     def __init__(self, args, parameters):
         super().__init__()
         self.args = args
-        self.byz_robots = [] if self.args.byz_num == 0 else list(range(self.num_agents))[-self.args.byz_num:]
+        self.byz_robots = [] if self.args.byz_num == 0 else list(range(self.args.num_agents))[-self.args.byz_num:]
         self.byz_style = self.args.byz_style
         if "grad" in self.byz_style:
             self.adversary = Adversary(self.byz_style.split("-")[1:])
@@ -59,14 +59,16 @@ class Leader(Server):
             with self.lock:
                 return self.parameters, self.version.value
         if 'gradients' in full_data['info']:
-            self.add_grad(full_data['info'])
+            self.add_grad(full_data['id'], full_data['info'])
+            return None, full_data['id']
+        if full_data['info'] in self.byz_style:
             return None, full_data['id']
     
-    def add_grad(self, infos: dict):
+    def add_grad(self, id, infos: dict):
         """infos: {"gradients": list, "contribution": float}"""
         with self.lock:
             self.buffer_grad.append(
-                (infos['contribution'], infos['gradients'])
+                (infos['contribution'], infos['gradients'], id)
             )
     
     def run(self):
@@ -140,7 +142,7 @@ class Leader(Server):
     @staticmethod
     def clip_norm(arr, max_norm):
         arr_norm = np.linalg.norm(arr)
-        if arr_norm < max_norm:
+        if arr_norm > max_norm:
             arr = arr * (max_norm / (arr_norm + 1e-6))
         return arr
         
@@ -150,7 +152,7 @@ class Worker:
         self.id = args.id
         rospy.init_node(f'agent_{self.id}_node', anonymous=True)
         self.args = args
-        self.byz_robots = [] if self.args.byz_num == 0 else list(range(self.num_agents))[-self.args.byz_num:]
+        self.byz_robots = [] if self.args.byz_num == 0 else list(range(self.args.num_agents))[-self.args.byz_num:]
         self.byz_style = self.args.byz_style
         if self.byz_style != "":
             assert self.args.byz_num > 0, "wrong byzantine numbers"
@@ -198,6 +200,9 @@ class Worker:
         
         if self.id in self.byz_robots and "action" in self.byz_style:
             action = int(self.byz_style.split("-")[1])
+            if agent_data['phase'] == 'train':
+                self.buffer_s.append(agent_data['state'])
+                self.buffer_map.append(agent_data['map'])
         else:
             if agent_data['phase'] == 'eval':
                 # choose action for avoiding obstacles
@@ -362,7 +367,7 @@ class Worker:
                 mode='a', header=False, index=False
             )
         if self.id == 0:
-            self.leader.add_grad(msg['info'])
+            self.leader.add_grad(msg['id'], msg['info'])
         else:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 client.connect((self.ip, self.port))
@@ -380,20 +385,20 @@ class Worker:
             ]):
             # if self.done:
                 self.steps += 1
-                # p = mp.Process(
-                #     target=self.train_and_update,
-                #     args=(
-                #         self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
-                #         self.done, self.normalize_ps_values_of_state(self.next_s),
-                #         self.next_map, self.args.gamma, self.optimizer
-                #     )
-                # )
-                # p.start()
-                self.train_and_update(
-                    self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
-                    self.done, self.normalize_ps_values_of_state(self.next_s),
-                    self.next_map, self.args.gamma, self.optimizer
+                p = mp.Process(
+                    target=self.train_and_update,
+                    args=(
+                        self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                        self.done, self.normalize_ps_values_of_state(self.next_s),
+                        self.next_map, self.args.gamma, self.optimizer
+                    )
                 )
+                p.start()
+                # self.train_and_update(
+                #     self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                #     self.done, self.normalize_ps_values_of_state(self.next_s),
+                #     self.next_map, self.args.gamma, self.optimizer
+                # )
                 self.done = False
                 self.buffer_s = []
                 self.buffer_map = []

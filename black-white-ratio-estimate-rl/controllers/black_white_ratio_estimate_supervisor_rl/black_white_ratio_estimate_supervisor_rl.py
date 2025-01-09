@@ -110,6 +110,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         # print("time_step: ", self.time_step)
         print("========== supervisor info ==========")
         print(f"byzantine_robots: {self.byz_robots}")
+        print(f"byzantine_style: {self.byz_style}")
         print(f"update method: {self.args.ratio_update_method}")
         print(f"groups: {self.groups}")
         print(f"swarm: {self.swarm}")

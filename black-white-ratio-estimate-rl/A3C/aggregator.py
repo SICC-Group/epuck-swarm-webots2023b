@@ -8,15 +8,14 @@ from sklearn.cluster import AgglomerativeClustering, KMeans
 class Aggregator:
     def __init__(self, method: str) -> None:
         self.method = method
+        self.func = getattr(self, f"_{self.method}", None)
+        if self.func is None:
+            raise ValueError(f"Method {self.method} is not defined")
     
     def __call__(self, all_gradients: torch.Tensor, *args, **kwargs) -> np.ndarray:
         """all_gradients: shape of (num, length of gradient)
         return an adversary gradient in shape of (1, length of gradient)"""
-        method_name = f"_{self.method}"
-        method = getattr(self, method_name, None)
-        if method is None:
-            raise ValueError(f"Method {self.method} is not defined")
-        res = method(all_gradients, *args, **kwargs).cpu()
+        res = self.func(all_gradients, *args, **kwargs).cpu()
         return res.numpy()
     
     @staticmethod
