@@ -60,6 +60,7 @@ class MyRunner(BaseRunner):
     def eval(self):
         """Collect episodes to evaluate the policy."""
         print("Start Evaluation")
+        time.sleep(self.args.aggregation_time)
         columns = ['step']
         columns.extend([f'local_ratio_{i}' for i in range(self.num_agents)])
         columns.append('global_ratio')
@@ -257,7 +258,8 @@ class MyRunner(BaseRunner):
     def plot_eval(self, env_info, eval_count):
         plt.figure(figsize=(10, 6))
         for i in range(self.num_agents):
-            plt.plot(env_info['step'], env_info[f'local_ratio_{i}'], label=f'local_ratio_{i}', linewidth=1.5)
+            alpha = 0.5 if i in self.env.byz_robots else 1
+            plt.plot(env_info['step'], env_info[f'local_ratio_{i}'], label=f'local_ratio_{i}', linewidth=1.5, alpha=alpha)
 
         x, y = zip(*env_info['global_ratio'])
         plt.plot(x, y, label='global_ratio', marker='o', linestyle='--', linewidth=2)

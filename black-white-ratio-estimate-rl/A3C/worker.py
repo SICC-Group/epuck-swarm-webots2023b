@@ -109,23 +109,40 @@ class Leader(Server):
                             print(self.args.ratio_update_method, weights)
                             aggregated_grad = sum(w * g for w, g in zip(weights, gradients))
                         
+                        if self.args.norm_decay_steps == 0:
+                            norm_ = self.args.grad_norm_init
+                        else:
+                            if self.version.value <= self.args.norm_decay_steps:
+                                norm_ = self.args.grad_norm_init
+                            else:
+                                norm_ = max(
+                                    self.args.grad_norm_init / (self.version.value - self.norm_decay_steps),
+                                    self.args.grad_norm_min
+                                )
+                            # norm_ = self.grad_norm_init if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
+                            # torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
                         
-                        # if self.norm_decay_steps == 0:
-                        #     torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_norm)
-                        # else:
-                        #     norm_ = self.grad_norm if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
-                        #     torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
+                        aggregated_grad = self.clip_norm(aggregated_grad, norm_)
                         self.parameters -= self.args.lr * aggregated_grad
                         self.version.value += 1
                         self.buffer_grad[:] = []
                         now = datetime.datetime.now()
-                        print(f"aggregated successfully at {now.strftime('%H:%M:%S')} and get version{self.version.value}")
+                        print("aggregated with grad in norm {} successfully at {} and get version{}".format(
+                            np.linalg.norm(aggregated_grad), now.strftime('%H:%M:%S'), self.version.value
+                        ))
             time.sleep(0.1)
     
     @staticmethod
     def softmax(x):
         exp_x = np.exp(x - np.max(x))
         return exp_x / np.sum(exp_x)
+
+    @staticmethod
+    def clip_norm(arr, max_norm):
+        arr_norm = np.linalg.norm(arr)
+        if arr_norm < max_norm:
+            arr = arr * (max_norm / (arr_norm + 1e-6))
+        return arr
         
 
 class Worker:
@@ -142,9 +159,8 @@ class Worker:
         self.steps = 0
         if self.args.model_dir is None:
             self.model = Model(
-                11, 4, self.args.col, self.args.row, device,
-                self.args.grad_norm_init, self.args.norm_decay_steps,
-                self.args.grad_norm_min, self.args.reward_normalize
+                11, 4, self.args.col, self.args.row,
+                device, self.args.reward_normalize
             )
         else:
             self.model = torch.load(self.args.model_dir, map_location=device)
