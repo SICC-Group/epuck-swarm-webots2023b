@@ -118,7 +118,7 @@ class Leader(Server):
                                 norm_ = self.args.grad_norm_init
                             else:
                                 norm_ = max(
-                                    self.args.grad_norm_init / (self.version.value - self.norm_decay_steps),
+                                    self.args.grad_norm_init / (self.version.value - self.args.norm_decay_steps),
                                     self.args.grad_norm_min
                                 )
                             # norm_ = self.grad_norm_init if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
@@ -385,20 +385,20 @@ class Worker:
             ]):
             # if self.done:
                 self.steps += 1
-                p = mp.Process(
-                    target=self.train_and_update,
-                    args=(
-                        self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
-                        self.done, self.normalize_ps_values_of_state(self.next_s),
-                        self.next_map, self.args.gamma, self.optimizer
-                    )
-                )
-                p.start()
-                # self.train_and_update(
-                #     self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
-                #     self.done, self.normalize_ps_values_of_state(self.next_s),
-                #     self.next_map, self.args.gamma, self.optimizer
+                # p = mp.Process(
+                #     target=self.train_and_update,
+                #     args=(
+                #         self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                #         self.done, self.normalize_ps_values_of_state(self.next_s),
+                #         self.next_map, self.args.gamma, self.optimizer
+                #     )
                 # )
+                # p.start()
+                self.train_and_update(
+                    self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                    self.done, self.normalize_ps_values_of_state(self.next_s),
+                    self.next_map, self.args.gamma, self.optimizer
+                )
                 self.done = False
                 self.buffer_s = []
                 self.buffer_map = []
