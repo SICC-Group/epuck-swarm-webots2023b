@@ -141,13 +141,13 @@ class MyRunner(BaseRunner):
             if all(done):
                 break
         
-        # if phase == "train":
-        #     self.train_count += 1
-        #     img_name = f'/{phase}_{self.train_count}.jpg'
-        #     self.total_train_steps += local_step * self.num_agents
-        # elif phase == "eval":
-        #     self.eval_count += 1
-        #     img_name = f'/{phase}_{self.eval_count}.jpg'
+        if phase == "train":
+            self.train_count += 1
+            # img_name = f'/{phase}_{self.train_count}.jpg'
+            self.total_train_steps += local_step * self.num_agents
+        elif phase == "eval":
+            self.eval_count += 1
+            # img_name = f'/{phase}_{self.eval_count}.jpg'
         # env.exportImage(self.image_dir + img_name, 100)
         time.sleep(10)
 
