@@ -47,8 +47,10 @@ class Model(nn.Module):
             self.fc = nn.Sequential(
                 nn.Linear(s_dim + 20, 128),
                 nn.ReLU(),
+                nn.Dropout(p=0.2),
                 nn.Linear(128, 64),
                 nn.ReLU(),
+                nn.Dropout(p=0.2),
             )
             self.policy = nn.Sequential(
                 nn.Linear(64, 32),
@@ -131,7 +133,7 @@ class Model(nn.Module):
             exp_v = m.log_prob(a) * td.detach().squeeze()
             a_loss = -exp_v.unsqueeze(-1)
             total_loss = (c_loss + a_loss).mean()
-            return total_loss
+            return total_loss, c_loss.mean(), a_loss.mean()
     
     def train_and_get_grad(self, bs, bmap, ba, br, done, s_, map_, gamma, opt, steps):
         if done:
@@ -152,7 +154,7 @@ class Model(nn.Module):
         buffer_v_target.reverse()
 
         opt.zero_grad()
-        loss = self.loss_func(
+        loss, c_loss, a_loss = self.loss_func(
             torch.tensor(bs, dtype=torch.float, device=self.device),
             torch.tensor(bmap, dtype=torch.float, device=self.device),
             torch.tensor(ba, dtype=torch.float, device=self.device),
@@ -166,7 +168,7 @@ class Model(nn.Module):
         #     torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
         grad = self.get_serializable_state_list(to_numpy=True, option='grad')
         opt.zero_grad()
-        return grad, loss.item()
+        return grad, loss.item(), c_loss.item(), a_loss.item()
     
     def load_serializable_state_list(
         self,

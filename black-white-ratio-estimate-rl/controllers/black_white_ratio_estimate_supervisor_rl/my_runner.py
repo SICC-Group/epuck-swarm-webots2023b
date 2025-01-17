@@ -89,6 +89,7 @@ class MyRunner(BaseRunner):
         episode_rewards = []
         episode_dones = []
         local_step = 0
+        start_time = time.time()
 
         while not rospy.is_shutdown() and local_step < self.buffer_length:
             local_step += 1
@@ -141,6 +142,8 @@ class MyRunner(BaseRunner):
             if all(done):
                 break
         
+        acceleration_rate = env.get_episode_time() / (time.time() - start_time)
+        print(f"\033[0;31macceleration rate: {acceleration_rate}\033[0m")
         if phase == "train":
             self.train_count += 1
             # img_name = f'/{phase}_{self.train_count}.jpg'
@@ -224,7 +227,7 @@ class MyRunner(BaseRunner):
                 if k != "convergence":
                     data_env.append(v)
                     if "ratio_estimate" in suffix_k:
-                        print(f"\033[0;31m{suffix_k} is {v}\033[0m")  # red
+                        print(f"\033[0;31m{suffix_k} is {v}\033[0m", end=" ")  # red
                     elif "exploration_ratio" in suffix_k:
                         print(f"\033[0;32m{suffix_k} is {v}\033[0m")  # green
                     else:

@@ -41,7 +41,10 @@ class Leader(Server):
         self.last_time = time.time()
         manager = mp.Manager()
         self.buffer_grad = manager.list()  # (contribution and gradient)
+        self.init_event = mp.Event()
         self.lock = mp.Lock()
+        self.log_dir = None
+        self.tb_writer = None
         
     def get_message(self):
         full_data = b""
@@ -63,6 +66,10 @@ class Leader(Server):
             return None, full_data['id']
         if full_data['info'] in self.byz_style:
             return None, full_data['id']
+    
+    def create_tb_writer(self):
+        assert self.log_dir is not None
+        self.tb_writer = SummaryWriter(self.log_dir)
     
     def add_grad(self, id, infos: dict):
         """infos: {"gradients": list, "contribution": float}"""
@@ -125,6 +132,7 @@ class Leader(Server):
                             # torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
                         
                         aggregated_grad = self.clip_norm(aggregated_grad, norm_)
+                        self.tb_writer.add_scalar("norm/aggregated", np.linalg.norm(aggregated_grad), self.version.value + 1)
                         self.parameters -= self.args.lr * aggregated_grad
                         self.version.value += 1
                         self.buffer_grad[:] = []
@@ -193,6 +201,11 @@ class Worker:
             if not os.path.exists(tb_dir):
                 os.makedirs(tb_dir)
             self.tb_writer = SummaryWriter(tb_dir)
+            if self.id == 0 and self.leader.log_dir is None:
+                self.leader.log_dir = agent_data['log_dir']
+                self.leader.create_tb_writer()
+                a = mp.Process(target=self.leader.aggregate)
+                a.start()
         # sync with the global model at the beginning of each episode
         if agent_data['step'] == 1:
             self.sync_with_global_model()
@@ -295,8 +308,6 @@ class Worker:
             self.leader = Leader(self.args, self.model.get_serializable_state_list(to_numpy=True))
             r = mp.Process(target=self.leader.run)
             r.start()
-            a = mp.Process(target=self.leader.aggregate)
-            a.start()
         time.sleep(2.0)
         # if self.id > 0:
         #     self.sync_with_global_model()
@@ -325,7 +336,7 @@ class Worker:
     def train_and_update(self, bs, bmap, ba, br, done, s_, map_, gamma, opt):
         if self.id in self.byz_robots and "grad" in self.byz_style:
             if "signflip" in self.byz_style:
-                grad, loss = self.model.train_and_get_grad(
+                grad, loss, c_loss, a_loss = self.model.train_and_get_grad(
                     bs, bmap, ba, br, done, s_, map_, gamma, opt, self.steps
                 )
                 grad *= -1
@@ -343,7 +354,7 @@ class Worker:
                 }
             self.tb_writer.add_scalar("contributions", self.contribution, self.steps)
         else:
-            grad, loss = self.model.train_and_get_grad(
+            grad, loss, c_loss, a_loss = self.model.train_and_get_grad(
                 bs, bmap, ba, br, done, s_, map_, gamma, opt, self.steps
             )
             msg = {
@@ -356,9 +367,12 @@ class Worker:
             ##############
             # record the contribution
             ##############
-            self.tb_writer.add_scalar("loss", loss, self.steps)
-            self.tb_writer.add_scalar("contributions", self.contribution, self.steps)
             norm_ = np.linalg.norm(grad)
+            self.tb_writer.add_scalar("loss/total", loss, self.steps)
+            self.tb_writer.add_scalar("loss/c_loss", c_loss, self.steps)
+            self.tb_writer.add_scalar("loss/a_loss", a_loss, self.steps)
+            self.tb_writer.add_scalar("contributions", self.contribution, self.steps)
+            self.tb_writer.add_scalar("norm/norm_local", norm_, self.steps)
             info_record = [self.steps, loss, norm_, self.contribution]
             print(f"\033[33mstep: {self.steps}, loss: {loss}, grad_norm: {norm_}\033[0m")
             df = pd.DataFrame([info_record])
@@ -419,5 +433,6 @@ if __name__ == '__main__':
     args, unknown = parser.parse_known_args(args_)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
     worker = Worker(args)
     worker.run()
