@@ -215,6 +215,9 @@ class MyRunner(BaseRunner):
             global_ratio_dict = dict(env_info['global_ratio'])
             df['global_ratio'] = df['step'].map(global_ratio_dict)
             df.to_csv(progress_filename,mode='a',header=False,index=False)
+            self.tb_writer.add_scalar("eval/steps", env_info['step'][-1], eval_count)
+            self.tb_writer.add_scalar("eval/global_ratio", env_info['global_ratio'][-1][-1], eval_count)
+            self.tb_writer.flush()
             try:
                 self.plot_eval(env_info, eval_count)
             except Exception as e:
@@ -253,6 +256,7 @@ class MyRunner(BaseRunner):
                             self.tb_writer.add_scalar(f"convergence/{self.train_count}", r, s)
                     else:
                         self.tb_writer.add_scalar(suffix_k, v, self.train_count)
+            self.tb_writer.flush()
             print()
             progress_filename = os.path.join(self.run_dir,'progress.csv')
             df = pd.DataFrame([data_env])

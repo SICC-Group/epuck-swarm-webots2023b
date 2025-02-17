@@ -94,6 +94,8 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.global_ratio_list = []  # list of tuples (step, ratio)
         self.global_ratio_estimation = 0
         self.is_update_global_ratio = False
+        self.done_exploration = False
+        self.after_done_exploration = False
         self.update_count = 0
         self.global_reward_total = 0
         self.global_reward_last = 0
@@ -344,6 +346,9 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         local_ratios = np.expand_dims(self.local_ratios, axis=-1)
         exp_ratios = np.expand_dims(self.exploration_ratios, axis=-1)
         
+        if not self.done_exploration and np.mean(self.exploration_ratios) > self.args.done_exploration:
+            self.done_exploration = True
+        
         # is_new_tiles_np = np.expand_dims(is_new_tiles, axis=-1).astype(np.float32)
         # exploration_ratio = np.expand_dims([sum(self.env_tiles.tiles_visited)/(self.row * self.col)] * self.num_agents, axis=-1)
         # ps_values_normalized = (ps_sensor_values - 55) / (max(np.max(ps_sensor_values), 450) - 55)
@@ -352,6 +357,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         )
         contributions = [0] * self.num_agents
         if self.steps % self.args.update_ratio_steps == 0:
+            if not self.after_done_exploration and self.done_exploration: self.after_done_exploration = True
             contributions = self._update_global_ratio(phase)
             self.is_update_global_ratio = True
         if self.steps % 2000 == 0:
@@ -437,21 +443,11 @@ class Epuck2Supervisor(CSVSupervisorEnv):
             # abs(self.global_ratio_list[1] - self.global_ratio_list[0]) < 0.01
         # if (all([r > self.args.done_exploration for r in self.exploration_ratios])and 
         #     abs(self.global_ratio_list[1] - self.global_ratio_list[0]) < 0.01):
-        if phase == "train":
-            exploration = self.args.done_exploration - 0.01 * train_count
-            if (np.mean(self.exploration_ratios) > max(exploration, self.args.min_exploration) and 
-                abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference):
-                print(f"ratio -2:{self.global_ratio_list[-2][1]}, ratio -1:{self.global_ratio_list[-1][1]}") 
-                return [True] * self.num_agents
-            else:
-                return [False] * self.num_agents
-        elif phase == "eval":
-            if (len(self.global_ratio_list) > 1 and
-                abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference):
-                print(f"ratio -2:{self.global_ratio_list[-2][1]}, ratio -1:{self.global_ratio_list[-1][1]}") 
-                return [True] * self.num_agents
-            else:
-                return [False] * self.num_agents
+        if (self.after_done_exploration and len(self.global_ratio_list) > 1 and
+            abs(self.global_ratio_list[-1][1] - self.global_ratio_list[-2][1]) < self.args.done_ratio_difference):
+            return [True] * self.num_agents
+        else:
+            return [False] * self.num_agents
     
     def get_info(self):
         return None
@@ -499,6 +495,8 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         self.update_count = 0
         self.global_ratio_list.clear()
         self.local_ratio_dict = {i: [] for i in range(self.num_agents)}
+        self.done_exploration = False
+        self.after_done_exploration = False
         # self.simulationReset()
         # for robot in self.robots:
         #     robot.restartController()

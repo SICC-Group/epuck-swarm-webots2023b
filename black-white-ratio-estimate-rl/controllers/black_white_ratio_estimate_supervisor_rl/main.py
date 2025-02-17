@@ -116,7 +116,7 @@ def main(args_):
     
     for i in range(num_agents):
         progress_filename_train = os.path.join(run_dir,f'progress_train_{i}.csv')
-        df = pd.DataFrame(columns=['step',f'loss{i}', 'norm', 'contribution']) 
+        df = pd.DataFrame(columns=['step',f'loss{i}', 'a_loss', 'c_loss', 'norm', 'contribution']) 
         df.to_csv(progress_filename_train,index=False)
     
     # progress_filename_train = os.path.join(run_dir,'progress_train_adj.csv')

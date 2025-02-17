@@ -27,9 +27,9 @@ parser.add_argument('--exclude_steps', type=int, default=5,
                     help="the gs values are not stable in the first some steps")
 parser.add_argument("--black_ratio", type=float, default=0.4,
                   help="the ratio of black tiles in the environment")
-parser.add_argument("--time_step", type=int, default=640,
+parser.add_argument("--time_step", type=int, default=32*15,
                   help="simulation time step in webots")
-parser.add_argument("--frequency_ratio", type=int, default=20, 
+parser.add_argument("--frequency_ratio", type=int, default=15, 
                     help="the ratio of frequency differences that "
                     "may exist among different sensors")
 parser.add_argument("--ps_threshold", type=int, default=80,
@@ -48,7 +48,7 @@ parser.add_argument('--n_training_threads', type=int,
 parser.add_argument('--use_wandb', action='store_true', default=False)
 parser.add_argument('--env_name', type=str, default="ratio_estimation")
 parser.add_argument('--algorithm_name', type=str, default="A3C")
-parser.add_argument('--max_episodes', type=int, default=80,
+parser.add_argument('--max_episodes', type=int, default=200,
                     help="Number of env steps to train for")
 parser.add_argument('--buffer_length', type=int, default=5000)
 parser.add_argument('--update_ratio_steps', type=int, default=100)
@@ -60,8 +60,8 @@ parser.add_argument('--ratio_update_method', type=str, default='all',
 
 # FRL info
 parser.add_argument("--collision_distance", type=float, default=0.1)
-parser.add_argument('--done_exploration', type=float, default=0.5)
-parser.add_argument('--min_exploration', type=float, default=0.3)
+parser.add_argument('--done_exploration', type=float, default=0.17)
+# parser.add_argument('--min_exploration', type=float, default=0.3)
 parser.add_argument('--done_ratio_difference', type=float, default=0.001)
 parser.add_argument("--reward_collision", type=float, default=-1.0)
 parser.add_argument("--reward_exploration", type=float, default=5.0,

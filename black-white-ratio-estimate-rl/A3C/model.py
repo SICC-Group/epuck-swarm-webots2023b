@@ -96,7 +96,7 @@ class Model(nn.Module):
             values = self.value(x)
             return logits, values
     
-    def choose_action(self, s, map_info):
+    def choose_action(self, s, map_info, mask):
         if self.continuous:
             self.training == False
             mu, sigma, _ = self.forward(s)
@@ -105,11 +105,12 @@ class Model(nn.Module):
         else:
             self.eval()
             logits, _ = self.forward(s, map_info)
+            logits[:,mask == 0] = -float('inf')
             prob = F.softmax(logits, dim=1).data
             m = self.distribution(prob)
             return int(m.sample().cpu().numpy())
     
-    def loss_func(self, s, map_info, a, v_t):
+    def loss_func(self, s, map_info, a, v_t, mask):
         self.train()
         if self.continuous:
             mu, sigma, values = self.forward(s)
@@ -126,16 +127,21 @@ class Model(nn.Module):
         else:
             logits, values = self.forward(s, map_info)
             td = v_t - values
+            td_mean = td.mean(dim=0)
+            td_std = td.std(dim=0)
+            td = (td - td_mean) / (td_std + 1e-10)
+
             c_loss = td.pow(2)
             
+            logits[mask == 0] = -float('inf')
             probs = F.softmax(logits, dim=1)
             m = self.distribution(probs)
             exp_v = m.log_prob(a) * td.detach().squeeze()
             a_loss = -exp_v.unsqueeze(-1)
-            total_loss = (c_loss + a_loss).mean()
-            return total_loss, c_loss.mean(), a_loss.mean()
+            total_loss = (c_loss + a_loss).sum()
+            return total_loss, c_loss.sum(), a_loss.sum()
     
-    def train_and_get_grad(self, bs, bmap, ba, br, done, s_, map_, gamma, opt, steps):
+    def train_and_get_grad(self, bs, bmap, ba, br, bmask, done, s_, map_, gamma, opt, steps):
         if done:
             v_s_ = 0
         else:
@@ -158,7 +164,8 @@ class Model(nn.Module):
             torch.tensor(bs, dtype=torch.float, device=self.device),
             torch.tensor(bmap, dtype=torch.float, device=self.device),
             torch.tensor(ba, dtype=torch.float, device=self.device),
-            torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1)
+            torch.tensor(buffer_v_target, dtype=torch.float, device=self.device).unsqueeze(-1),
+            torch.vstack(bmask).to(self.device),
         )
         loss.backward()
         # if self.norm_decay_steps == 0:

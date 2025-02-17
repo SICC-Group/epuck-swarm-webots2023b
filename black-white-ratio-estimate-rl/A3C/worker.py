@@ -69,7 +69,10 @@ class Leader(Server):
     
     def create_tb_writer(self):
         assert self.log_dir is not None
-        self.tb_writer = SummaryWriter(self.log_dir)
+        tb_dir = os.path.join(self.log_dir, "leader")
+        if not os.path.exists(tb_dir):
+            os.makedirs(tb_dir)
+        self.tb_writer = SummaryWriter(tb_dir)
     
     def add_grad(self, id, infos: dict):
         """infos: {"gradients": list, "contribution": float}"""
@@ -133,6 +136,7 @@ class Leader(Server):
                         
                         aggregated_grad = self.clip_norm(aggregated_grad, norm_)
                         self.tb_writer.add_scalar("norm/aggregated", np.linalg.norm(aggregated_grad), self.version.value + 1)
+                        self.tb_writer.flush()
                         self.parameters -= self.args.lr * aggregated_grad
                         self.version.value += 1
                         self.buffer_grad[:] = []
@@ -166,6 +170,7 @@ class Worker:
             assert self.args.byz_num > 0, "wrong byzantine numbers"
         self.ip, self.port = "localhost", 9801
         self.last_action = None
+        self.obstacle = False
         self.steps = 0
         if self.args.model_dir is None:
             self.model = Model(
@@ -183,6 +188,7 @@ class Worker:
         self.buffer_r = []
         self.contribution = 0
         # self.buffer_done = []
+        self.buffer_mask = []
         self.done = False
         self.save_dir = None
         self.log_dir = None
@@ -209,14 +215,18 @@ class Worker:
         # sync with the global model at the beginning of each episode
         if agent_data['step'] == 1:
             self.sync_with_global_model()
+            self.last_action = None
         
         
         if self.id in self.byz_robots and "action" in self.byz_style:
             action = int(self.byz_style.split("-")[1])
+            mask = torch.ones(4, dtype=torch.int)
             if agent_data['phase'] == 'train':
                 self.buffer_s.append(agent_data['state'])
                 self.buffer_map.append(agent_data['map'])
         else:
+            mask = self.get_mask(agent_data['state'][-8:], self.last_action)
+            # print("mask: ", mask)
             if agent_data['phase'] == 'eval':
                 # choose action for avoiding obstacles
                 ps_values = agent_data['state'][-8:]
@@ -228,30 +238,30 @@ class Worker:
                 back_obstacle = any(
                     value > self.args.ps_threshold for value in ps_values[3:-3]
                 )
-                if self.last_action == 3:
+                if self.last_action == 3 and self.obstacle:
                     action = random.choice([1, 2])  # turn right or left
-                    self.last_action = None
                 else:
                     if front_obstacle:
                         action = 3
-                        self.last_action = 3
+                        self.obstacle = True
                     elif right_obstacle:
                         action = 1
-                        self.last_action = None
+                        self.obstacle = True
                     elif left_obstacle:
                         action = 2
-                        self.last_action = None
+                        self.obstacle = True
                     elif back_obstacle:
                         action = 0
-                        self.last_action = None
+                        self.obstacle = True
                     else:
+                        self.obstacle = False
                         state = self.normalize_ps_values_of_state(agent_data['state'])
                         with torch.no_grad():
                             action = self.model.choose_action(
                                 torch.tensor(state, dtype=torch.float, device=device),
-                                torch.tensor(agent_data['map'], dtype=torch.float, device=device)
+                                torch.tensor(agent_data['map'], dtype=torch.float, device=device),
+                                mask,
                             )
-                        self.last_action = None
             
             elif agent_data['phase'] == 'train':
                 state = self.normalize_ps_values_of_state(agent_data['state'])
@@ -261,11 +271,17 @@ class Worker:
                 with torch.no_grad():
                     action = self.model.choose_action(
                         torch.tensor(state, dtype=torch.float, device=device),
-                        torch.tensor(agent_data['map'], dtype=torch.float, device=device)
+                        torch.tensor(agent_data['map'], dtype=torch.float, device=device),
+                        mask,
                     )
+            self.last_action = action
 
-        if agent_data['phase'] == 'train': self.buffer_a.append(action)  # action type, should be `int`
+        if agent_data['phase'] == 'train':
+            self.buffer_a.append(action)
+            self.buffer_mask.append(mask)
         message = json.dumps(action)
+        # print(f"state: {agent_data['state']}")
+        # print(f"action: {action}")
         # rospy.loginfo(f'Publishing action for agent_{self.id}: {message}')
         self.publisher.publish(message)
     
@@ -328,16 +344,39 @@ class Worker:
                 self.get_message(client)
     
     def normalize_ps_values_of_state(self, s):
-        ps_values = s[-8:]
+        tmp_s = deepcopy(s)
+        ps_values = tmp_s[-8:]
         ps_values_normalized = (np.array(ps_values) - 55) / (max(np.max(ps_values), 450) - 55)
-        s[-8:] = ps_values_normalized
-        return s
+        tmp_s[-8:] = ps_values_normalized
+        return tmp_s
     
-    def train_and_update(self, bs, bmap, ba, br, done, s_, map_, gamma, opt):
+    def get_mask(self, ps_values, last_action):
+        # print("ps_values: ", ps_values)
+        mask = torch.ones(4, dtype=torch.int)
+        if last_action == 3:
+            mask[3] = 0
+            mask[0] = 0
+        right_obstacle = any(
+            value > self.args.ps_threshold for value in ps_values[:3])
+        left_obstacle = any(
+            value > self.args.ps_threshold for value in ps_values[-3:])
+        front_obstacle = right_obstacle and left_obstacle
+        back_obstacle = any(
+            value > self.args.ps_threshold for value in ps_values[3:-3]
+        )
+        if right_obstacle: mask[2] = 0
+        if left_obstacle: mask[1] = 0
+        if front_obstacle: mask[0] = 0
+        if back_obstacle: mask[3] = 0
+        if mask.sum() == 0:
+            mask[random.choice([0, 1, 2, 3])] = 1
+        return mask
+    
+    def train_and_update(self, bs, bmap, ba, br, bmask, done, s_, map_, gamma, opt):
         if self.id in self.byz_robots and "grad" in self.byz_style:
             if "signflip" in self.byz_style:
                 grad, loss, c_loss, a_loss = self.model.train_and_get_grad(
-                    bs, bmap, ba, br, done, s_, map_, gamma, opt, self.steps
+                    bs, bmap, ba, br, bmask, done, s_, map_, gamma, opt, self.steps
                 )
                 grad *= -1
                 msg = {
@@ -353,9 +392,10 @@ class Worker:
                     "info": self.byz_style.split("-")[1]
                 }
             self.tb_writer.add_scalar("contributions", self.contribution, self.steps)
+            self.tb_writer.flush()
         else:
             grad, loss, c_loss, a_loss = self.model.train_and_get_grad(
-                bs, bmap, ba, br, done, s_, map_, gamma, opt, self.steps
+                bs, bmap, ba, br, bmask, done, s_, map_, gamma, opt, self.steps
             )
             msg = {
                 "id": self.id,
@@ -373,8 +413,9 @@ class Worker:
             self.tb_writer.add_scalar("loss/a_loss", a_loss, self.steps)
             self.tb_writer.add_scalar("contributions", self.contribution, self.steps)
             self.tb_writer.add_scalar("norm/norm_local", norm_, self.steps)
-            info_record = [self.steps, loss, norm_, self.contribution]
-            print(f"\033[33mstep: {self.steps}, loss: {loss}, grad_norm: {norm_}\033[0m")
+            self.tb_writer.flush()
+            info_record = [self.steps, loss, a_loss, c_loss, norm_, self.contribution]
+            print(f"\033[33mstep: {self.steps}, loss: {loss:.6f}, a_loss: {a_loss:.6f}, c_loss:{c_loss:.6f}, grad_norm: {norm_:.6f}\033[0m")
             df = pd.DataFrame([info_record])
             df.to_csv(
                 os.path.join(self.log_dir, f'../progress_train_{self.id}.csv'),
@@ -402,14 +443,14 @@ class Worker:
                 # p = mp.Process(
                 #     target=self.train_and_update,
                 #     args=(
-                #         self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                #         self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r, self.buffer_mask,
                 #         self.done, self.normalize_ps_values_of_state(self.next_s),
                 #         self.next_map, self.args.gamma, self.optimizer
                 #     )
                 # )
                 # p.start()
                 self.train_and_update(
-                    self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r,
+                    self.buffer_s, self.buffer_map, self.buffer_a, self.buffer_r, self.buffer_mask,
                     self.done, self.normalize_ps_values_of_state(self.next_s),
                     self.next_map, self.args.gamma, self.optimizer
                 )
@@ -418,6 +459,7 @@ class Worker:
                 self.buffer_map = []
                 self.buffer_a = []
                 self.buffer_r = []
+                self.buffer_mask = []
                 self.contribution = 0
                 # self.buffer_done = []
                 
@@ -431,8 +473,8 @@ if __name__ == '__main__':
     from config import parser
     args_ = sys.argv[1:]
     args, unknown = parser.parse_known_args(args_)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed + args.id)
+    torch.manual_seed(args.seed + args.id)
+    torch.cuda.manual_seed_all(args.seed + args.id)
     worker = Worker(args)
     worker.run()

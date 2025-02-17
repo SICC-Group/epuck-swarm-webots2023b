@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python-deepbots
 import os, sys
 import random
 import json
@@ -128,7 +128,8 @@ class RobotController(CSVRobot):
     def use_message_data(self, message):
         # action
         # if self.robot_name in [0, "0"]: print("update action")
-        action = int(message[int(self.robot_name) - 1])
+        action = int(message[int(self.robot_name)])
+        # if self.robot_name in [0, "0"]: print(message)
         # speed = [0, 0]
         # linear_vel = self.vel_actions[action][0]
         # angle_vel = self.vel_actions[action][1]
