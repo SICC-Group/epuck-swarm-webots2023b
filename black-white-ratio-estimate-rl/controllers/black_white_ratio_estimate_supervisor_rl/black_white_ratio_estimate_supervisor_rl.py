@@ -1,4 +1,4 @@
-#!/usr/bin/python-deepbots
+#!/usr/bin/python3
 import os, sys
 import random
 import math
@@ -54,10 +54,10 @@ class LocalMap:
         try:
             if self.id in self.byz_robots and "ratio" in self.byz_style:
                 style = self.byz_style.split("-")[1]
-                if style.isdigit():
-                    r = float(style)
-                else:
+                if style == 'r':
                     r = random.uniform(0,1)
+                else:
+                    r = float(style)
                 return r
             else:
                 return self.black_count / (self.black_count + self.white_count)
