@@ -6,9 +6,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--id", type=int, default=0)
 parser.add_argument("--num_agents", type=int, default=6,
                   help="number of robots in the swarm")
-parser.add_argument("--byz_num", type=int, default=0,
+parser.add_argument("--byz_num", type=int, default=0, ######
                   help="number of byzantine robots in the swarm")
-parser.add_argument("--byz_style", type=str, default="", 
+parser.add_argument("--byz_style", type=str, default="", ######
                     choices=["", "ratio-1", "ratio-0.6", "ratio-0.3", "ratio-0", "ratio-r",
                              "action-0", "action-1", "action-2", "action-3",
                              "grad-noise", "grad-signflip", "grad-alie",
@@ -54,7 +54,7 @@ parser.add_argument('--buffer_length', type=int, default=5000)
 parser.add_argument('--update_ratio_steps', type=int, default=100)
 parser.add_argument('--model_dir', type=str, default=None)
 parser.add_argument('--ratio_update_method', type=str, default='all',
-                    choices=['threshold', 'shapley', 'all'],
+                    choices=['threshold', 'shapley', 'all'], ######
                     help="The method to update the global ratio in evaluation"
                     "options: threshold, shapley, all")
 
@@ -77,10 +77,10 @@ parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--reward_normalize', action='store_false', default=False)
 
-parser.add_argument('--grad_norm_init', type=int, default=800)
+parser.add_argument('--grad_norm_init', type=int, default=100)
 parser.add_argument('--norm_decay_steps', type=int, default=12)
 parser.add_argument('--grad_norm_min', type=float, default=100)
-parser.add_argument('--grad_aggregation', type=str, default="mean", 
+parser.add_argument('--grad_aggregation', type=str, default="mean",  ######
                     choices=["mean", "median", "multikrum", "clustering", "signguard"])
 parser.add_argument('--aggregation_time', type=int, default=100)
 

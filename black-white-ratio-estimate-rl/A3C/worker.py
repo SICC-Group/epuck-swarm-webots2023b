@@ -121,20 +121,20 @@ class Leader(Server):
                             print(self.args.ratio_update_method, weights)
                             aggregated_grad = sum(w * g for w, g in zip(weights, gradients))
                         
-                        if self.args.norm_decay_steps == 0:
-                            norm_ = self.args.grad_norm_init
-                        else:
-                            if self.version.value <= self.args.norm_decay_steps:
-                                norm_ = self.args.grad_norm_init
-                            else:
-                                norm_ = max(
-                                    self.args.grad_norm_init / (self.version.value - self.args.norm_decay_steps),
-                                    self.args.grad_norm_min
-                                )
-                            # norm_ = self.grad_norm_init if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
-                            # torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
+                        # if self.args.norm_decay_steps == 0:
+                        #     norm_ = self.args.grad_norm_init
+                        # else:
+                        #     if self.version.value <= self.args.norm_decay_steps:
+                        #         norm_ = self.args.grad_norm_init
+                        #     else:
+                        #         norm_ = max(
+                        #             self.args.grad_norm_init / (self.version.value - self.args.norm_decay_steps),
+                        #             self.args.grad_norm_min
+                        #         )
+                        #     # norm_ = self.grad_norm_init if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
+                        #     # torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
                         
-                        aggregated_grad = self.clip_norm(aggregated_grad, norm_)
+                        aggregated_grad = self.clip_norm(aggregated_grad, self.args.grad_norm_init)
                         self.tb_writer.add_scalar("norm/aggregated", np.linalg.norm(aggregated_grad), self.version.value + 1)
                         self.tb_writer.flush()
                         self.parameters -= self.args.lr * aggregated_grad
@@ -153,10 +153,13 @@ class Leader(Server):
 
     @staticmethod
     def clip_norm(arr, max_norm):
-        arr_norm = np.linalg.norm(arr)
-        if arr_norm > max_norm:
-            arr = arr * (max_norm / (arr_norm + 1e-6))
-        return arr
+        if max_norm == 0:
+            return arr
+        else:
+            arr_norm = np.linalg.norm(arr)
+            if arr_norm > max_norm:
+                arr = arr * (max_norm / (arr_norm + 1e-6))
+            return arr
         
 
 class Worker:
