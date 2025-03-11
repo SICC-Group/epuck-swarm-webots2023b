@@ -31,9 +31,9 @@ class Leader(Server):
         self.args = args
         self.byz_robots = [] if self.args.byz_num == 0 else list(range(self.args.num_agents))[-self.args.byz_num:]
         self.byz_style = self.args.byz_style
+        self.aggregator = Aggregator(self.args.grad_aggregation)
         if "grad" in self.byz_style:
             self.adversary = Adversary(self.byz_style.split("-")[1:])
-            self.aggregator = Aggregator(self.args.grad_aggregation)
         self.shared_array = mp.Array('d', len(parameters))
         self.parameters = np.frombuffer(self.shared_array.get_obj(), dtype=np.float64)
         np.copyto(self.parameters, parameters)
@@ -112,28 +112,17 @@ class Leader(Server):
                                     num_byz=self.args.byz_num
                                 )
                                 tensor_gradients = torch.cat((tensor_gradients, adversary_grad), dim=0)
-                            aggregated_grad = self.aggregator(tensor_gradients)
+                            # aggregated_grad = self.aggregator(tensor_gradients)
                         # 没有存在梯度攻击
                         else:
-                            contributions = np.array([grad[0] for grad in self.buffer_grad])
+                            # contributions = np.array([grad[0] for grad in self.buffer_grad])
                             gradients = np.array([grad[1] for grad in self.buffer_grad])
-                            weights = self.softmax(contributions)
-                            print(self.args.ratio_update_method, weights)
-                            aggregated_grad = sum(w * g for w, g in zip(weights, gradients))
+                            tensor_gradients = torch.tensor(gradients, dtype=torch.float)
+                            # weights = self.softmax(contributions)
+                            # print(self.args.ratio_update_method, weights)
+                            # aggregated_grad = sum(w * g for w, g in zip(weights, gradients))
                         
-                        # if self.args.norm_decay_steps == 0:
-                        #     norm_ = self.args.grad_norm_init
-                        # else:
-                        #     if self.version.value <= self.args.norm_decay_steps:
-                        #         norm_ = self.args.grad_norm_init
-                        #     else:
-                        #         norm_ = max(
-                        #             self.args.grad_norm_init / (self.version.value - self.args.norm_decay_steps),
-                        #             self.args.grad_norm_min
-                        #         )
-                        #     # norm_ = self.grad_norm_init if steps <= self.norm_decay_steps else self.grad_norm / (steps - self.norm_decay_steps)
-                        #     # torch.nn.utils.clip_grad_norm_(self.parameters(), max(norm_, self.grad_norm_min))
-                        
+                        aggregated_grad = self.aggregator(tensor_gradients)
                         aggregated_grad = self.clip_norm(aggregated_grad, self.args.grad_norm_init)
                         self.tb_writer.add_scalar("norm/aggregated", np.linalg.norm(aggregated_grad), self.version.value + 1)
                         self.tb_writer.flush()
@@ -175,13 +164,13 @@ class Worker:
         self.last_action = None
         self.obstacle = False
         self.steps = 0
-        if self.args.model_dir is None:
-            self.model = Model(
-                11, 4, self.args.col, self.args.row,
-                device, self.args.reward_normalize
-            )
-        else:
-            self.model = torch.load(self.args.model_dir, map_location=device)
+        self.model = Model(
+            11, 4, self.args.col, self.args.row,
+            device, self.args.reward_normalize
+        )
+        if self.args.model_dir is not None:
+            load_model = torch.load(self.args.model_dir, map_location=device)
+            self.model.load_state_dict(load_model.state_dict())
             print("lode model successfully")
         self.model = self.model.to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)

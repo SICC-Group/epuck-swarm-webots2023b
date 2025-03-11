@@ -63,6 +63,7 @@ class MyRunner(BaseRunner):
         time.sleep(self.args.aggregation_time)
         columns = ['step']
         columns.extend([f'local_ratio_{i}' for i in range(self.num_agents)])
+        columns.extend([f'contribution_{i}' for i in range(self.num_agents)])
         columns.append('global_ratio')
         for i in tqdm(range(self.args.num_eval_episodes), desc="Evaluating"):
             progress_filename = os.path.join(
@@ -88,6 +89,7 @@ class MyRunner(BaseRunner):
         episode_actions = []
         episode_rewards = []
         episode_dones = []
+        contributions = [0] * self.num_agents
         local_step = 0
         start_time = time.time()
 
@@ -123,6 +125,7 @@ class MyRunner(BaseRunner):
                     'total_steps': self.total_train_steps,
                     'contribution': c[i],
                 }
+                contributions[i] += c[i]
                 # rospy.loginfo(f'Publishing data for agent_{i}: {r[i]}')
                 self.publishers_reward[i].publish(json.dumps(agent_data))
                 time.sleep(0.01)
@@ -177,6 +180,7 @@ class MyRunner(BaseRunner):
             env_info['step'] = list(range(1, local_step + 1))
             for i in range(self.num_agents):
                 env_info[f'local_ratio_{i}'] = env.local_ratio_dict[i]
+                env_info[f'contribution_{i}'] = contributions[i]
             env_info['global_ratio'] = env.global_ratio_list
         return env_info
 
@@ -212,6 +216,9 @@ class MyRunner(BaseRunner):
             df = pd.DataFrame({'step': env_info['step']})
             for i in range(self.num_agents):
                 df[f'local_ratio_{i}'] = env_info[f'local_ratio_{i}']
+            for i in range(self.num_agents):
+                df[f'contribution_{i}'] = env_info[f'contribution_{i}']
+                self.tb_writer.add_scalar(f"eval/contribution_{i}", env_info[f'contribution_{i}'], eval_count)
             global_ratio_dict = dict(env_info['global_ratio'])
             df['global_ratio'] = df['step'].map(global_ratio_dict)
             df.to_csv(progress_filename,mode='a',header=False,index=False)

@@ -14,8 +14,8 @@ class Adversary:
         if self.method == "noise":
             # self.mu = 2.0
             # self.sigma = 1.0
-            self.low = -3.0
-            self.high = 3.0
+            self.low = -1.0
+            self.high = 1.0
     
     def __call__(self, benign_gradients, *args, **kwargs) -> np.ndarray:
         """benign gradients: shape of (num_benign_agents, length of gradient)
