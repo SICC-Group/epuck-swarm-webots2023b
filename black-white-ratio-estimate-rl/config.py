@@ -81,7 +81,7 @@ parser.add_argument('--grad_norm_init', type=int, default=100)
 parser.add_argument('--norm_decay_steps', type=int, default=12)
 parser.add_argument('--grad_norm_min', type=float, default=100)
 parser.add_argument('--grad_aggregation', type=str, default="mean",  ######
-                    choices=["mean", "median", "multikrum", "clustering", "signguard"])
+                    choices=["mean", "median", "multikrum", "clustering", "signguard", "shapley"])
 parser.add_argument('--aggregation_time', type=int, default=100)
 
 # eval

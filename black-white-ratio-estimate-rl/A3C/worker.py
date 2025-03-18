@@ -64,8 +64,8 @@ class Leader(Server):
         if 'gradients' in full_data['info']:
             self.add_grad(full_data['id'], full_data['info'])
             return None, full_data['id']
-        if full_data['info'] in self.byz_style:
-            return None, full_data['id']
+        # if full_data['info'] in self.byz_style:
+        #     return None, full_data['id']
     
     def create_tb_writer(self):
         assert self.log_dir is not None
@@ -104,7 +104,8 @@ class Leader(Server):
                     if len(self.buffer_grad) > (self.args.num_agents // 2):
                         # 针对是否存在梯度攻击，进行分类
                         if "grad" in self.byz_style:
-                            gradients = [grad[1] for grad in self.buffer_grad]
+                            contributions = [grad[0] for grad in self.buffer_grad if isinstance(grad[1], list)]
+                            gradients = [grad[1] for grad in self.buffer_grad if isinstance(grad[1], list)]
                             tensor_gradients = torch.tensor(gradients, dtype=torch.float)
                             if "signflip" not in self.byz_style:
                                 adversary_grad = self.adversary(
@@ -112,17 +113,18 @@ class Leader(Server):
                                     num_byz=self.args.byz_num
                                 )
                                 tensor_gradients = torch.cat((tensor_gradients, adversary_grad), dim=0)
+                            contributions.extend([grad[0] for grad in self.buffer_grad if isinstance(grad[1], str)])
                             # aggregated_grad = self.aggregator(tensor_gradients)
                         # 没有存在梯度攻击
                         else:
-                            # contributions = np.array([grad[0] for grad in self.buffer_grad])
-                            gradients = np.array([grad[1] for grad in self.buffer_grad])
+                            contributions = np.array([grad[0] for grad in self.buffer_grad])
+                            gradients = [grad[1] for grad in self.buffer_grad]
                             tensor_gradients = torch.tensor(gradients, dtype=torch.float)
                             # weights = self.softmax(contributions)
                             # print(self.args.ratio_update_method, weights)
                             # aggregated_grad = sum(w * g for w, g in zip(weights, gradients))
                         
-                        aggregated_grad = self.aggregator(tensor_gradients)
+                        aggregated_grad = self.aggregator(tensor_gradients, contributions=contributions)
                         aggregated_grad = self.clip_norm(aggregated_grad, self.args.grad_norm_init)
                         self.tb_writer.add_scalar("norm/aggregated", np.linalg.norm(aggregated_grad), self.version.value + 1)
                         self.tb_writer.flush()
@@ -381,7 +383,10 @@ class Worker:
             else:
                 msg = {
                     "id": self.id,
-                    "info": self.byz_style.split("-")[1]
+                    "info": {
+                        "gradients": self.byz_style.split("-")[1],
+                        "contribution": self.contribution
+                    }
                 }
             self.tb_writer.add_scalar("contributions", self.contribution, self.steps)
             self.tb_writer.flush()

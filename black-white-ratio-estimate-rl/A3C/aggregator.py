@@ -4,6 +4,7 @@ from numpy import inf
 import torch.nn.functional as F
 from sklearn.cluster import AgglomerativeClustering, KMeans
 
+from itertools import combinations
 
 class Aggregator:
     def __init__(self, method: str) -> None:
@@ -114,6 +115,7 @@ class Aggregator:
     def _clustering(
         self,
         params: torch.Tensor,
+        *args, **kwargs,
     ):
         num = len(params)
         dis_max = np.zeros((num, num))
@@ -140,6 +142,7 @@ class Aggregator:
         params: torch.Tensor,
         agg="mean",
         linkage="average",
+        *args, **kwargs,
     ):
         assert linkage in ["average", "single"]
         num = len(params)
@@ -170,4 +173,76 @@ class Aggregator:
 
         selected_idx = list(set(S1_idxs) & set(S2_idxs))
         values = params[selected_idx].mean(dim=0)
+        return values
+
+    
+    def __get_norm_contributions(
+        self,
+        params: torch.Tensor,
+        comb: dict,
+    ):
+        shapley_values = torch.zeros(len(params))
+        norms = torch.norm(params, dim=1)
+        norms = (norms - norms.mean()) / (norms.std() + 1e-10)
+        for i in range(len(params)):
+            for c in comb[i]:
+                consistency_without_i = -torch.var(norms[c])
+                consistency_with_i = -torch.var(norms[c + [i]])
+                shapley_values[i] += consistency_with_i - consistency_without_i
+            shapley_values[i] /= len(comb[i])
+        return F.softmax(shapley_values, dim=0)
+
+
+    def __get_direction_contributions(
+        self,
+        params: torch.Tensor,
+        comb: dict,
+    ):
+        shapley_values = torch.zeros(len(params))
+        num = len(params)
+        dis_max = np.zeros((num, num))
+        for i in range(num):
+            for j in range(i + 1, num):
+                dis_max[i, j] = 1 - F.cosine_similarity(
+                    params[i, :], params[j, :], dim=0
+                )
+                dis_max[j, i] = dis_max[i, j]
+        for i in range(len(params)):
+            for c in comb[i]:
+                consistency_without_i = -torch.var(self.__get_all_cos_sim(dis_max, c))
+                consistency_with_i = -torch.var(self.__get_all_cos_sim(dis_max, c + [i]))
+                shapley_values[i] += consistency_with_i - consistency_without_i
+            shapley_values[i] /= len(comb[i])
+        
+        return F.softmax(shapley_values, dim=0)
+    
+    def __get_all_cos_sim(self, dis_max, idxs):
+        c = list(combinations(idxs, 2))
+        res = torch.zeros(len(c))
+        for i, (x, y) in enumerate(c):
+            res[i] = dis_max[x, y]
+        return res
+
+    
+    def _shapley(
+        self,
+        params: torch.Tensor,
+        *args, **kwargs,
+    ):
+        num = len(params)
+        comb = {}
+        for i in range(num):
+            remaining_agents = [x for x in range(num) if x != i]
+            comb_num_agents_minus_1 = list(combinations(remaining_agents, num - 1))
+            comb_num_agents_minus_2 = list(combinations(remaining_agents, num - 2))
+            comb[i] = [list(c) for c in (comb_num_agents_minus_1 + comb_num_agents_minus_2)]
+        task_contributions = F.softmax(
+            torch.tensor(kwargs["contributions"], dtype=torch.float), dim=0
+        )
+        norm_contributions = self.__get_norm_contributions(params, comb)
+        direction_contributions = self.__get_direction_contributions(params, comb)
+        total_contributions = task_contributions + norm_contributions + direction_contributions
+        top_idx = torch.argsort(total_contributions, descending=True)
+        selected_params = params[top_idx[:int(len(params) * (2/3))]]
+        values = selected_params.mean(dim=0)
         return values

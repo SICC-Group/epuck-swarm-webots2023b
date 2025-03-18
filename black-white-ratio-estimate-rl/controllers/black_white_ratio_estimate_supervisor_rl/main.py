@@ -141,4 +141,4 @@ def main(args_):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
-    # tmux kill-session -t workers
+    os.system("tmux kill-session -t workers")

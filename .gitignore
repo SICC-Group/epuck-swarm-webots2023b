@@ -1,3 +1,10 @@
+.vscode
+
 black-white-ratio-estimate-rl/parallel_*
+black-white-ratio-estimate-rl/results
+black-white-ratio-estimate-rl/plot*
+black-white-ratio-estimate-randomwalk
+
+*test*
 
 **/__pycache__

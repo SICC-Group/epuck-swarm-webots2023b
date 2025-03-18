@@ -40,7 +40,6 @@ else
             tmux split-window -v -t $i
             tmux split-window -v -t $((2 * (i + 1)))
         done
-        tmux select-window -t $((panes - 1))
         tmux select-layout tiled
     }
     create_even_panes $NUM_WORKERS
