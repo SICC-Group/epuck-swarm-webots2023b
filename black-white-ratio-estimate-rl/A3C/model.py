@@ -134,10 +134,13 @@ class Model(nn.Module):
             c_loss = td.pow(2)
             
             logits[mask == 0] = -float('inf')
-            probs = F.softmax(logits, dim=1)
-            m = self.distribution(probs)
-            exp_v = m.log_prob(a) * td.detach().squeeze()
-            a_loss = -exp_v.unsqueeze(-1)
+            # probs = F.softmax(logits, dim=1)
+            # m = self.distribution(probs)
+            # exp_v = m.log_prob(a) * td.detach().squeeze()
+            # a_loss = -exp_v.unsqueeze(-1)
+            log_probs = F.log_softmax(logits, dim=1)
+            log_probs_a = log_probs.gather(1, a.long().unsqueeze(-1))
+            a_loss = -log_probs_a * td.detach()
             total_loss = (c_loss + a_loss).sum()
             return total_loss, c_loss.sum(), a_loss.sum()
     
