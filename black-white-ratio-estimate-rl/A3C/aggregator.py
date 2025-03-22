@@ -190,7 +190,7 @@ class Aggregator:
                 consistency_with_i = -torch.var(norms[c + [i]])
                 shapley_values[i] += consistency_with_i - consistency_without_i
             shapley_values[i] /= len(comb[i])
-        return F.softmax(shapley_values, dim=0)
+        return shapley_values
 
 
     def __get_direction_contributions(
@@ -200,7 +200,7 @@ class Aggregator:
     ):
         shapley_values = torch.zeros(len(params))
         num = len(params)
-        dis_max = np.zeros((num, num))
+        dis_max = torch.zeros((num, num))
         for i in range(num):
             for j in range(i + 1, num):
                 dis_max[i, j] = 1 - F.cosine_similarity(
@@ -209,12 +209,12 @@ class Aggregator:
                 dis_max[j, i] = dis_max[i, j]
         for i in range(len(params)):
             for c in comb[i]:
-                consistency_without_i = -torch.var(self.__get_all_cos_sim(dis_max, c))
-                consistency_with_i = -torch.var(self.__get_all_cos_sim(dis_max, c + [i]))
+                consistency_without_i = -torch.mean(self.__get_all_cos_sim(dis_max, c))
+                consistency_with_i = -torch.mean(self.__get_all_cos_sim(dis_max, c + [i]))
                 shapley_values[i] += consistency_with_i - consistency_without_i
             shapley_values[i] /= len(comb[i])
         
-        return F.softmax(shapley_values, dim=0)
+        return shapley_values
     
     def __get_all_cos_sim(self, dis_max, idxs):
         c = list(combinations(idxs, 2))
@@ -236,13 +236,15 @@ class Aggregator:
             comb_num_agents_minus_1 = list(combinations(remaining_agents, num - 1))
             comb_num_agents_minus_2 = list(combinations(remaining_agents, num - 2))
             comb[i] = [list(c) for c in (comb_num_agents_minus_1 + comb_num_agents_minus_2)]
-        task_contributions = F.softmax(
-            torch.tensor(kwargs["contributions"], dtype=torch.float), dim=0
-        )
+        if all(c == 0 for c in kwargs["contributions"]):
+            task_selected = list(range(num))
+        else:
+            task_contributions = torch.tensor(kwargs["contributions"], dtype=torch.float)
+            task_selected = torch.argsort(task_contributions, descending=True).tolist()[:-1]
         norm_contributions = self.__get_norm_contributions(params, comb)
+        norm_selected = torch.argsort(norm_contributions, descending=True).tolist()[:-1]
         direction_contributions = self.__get_direction_contributions(params, comb)
-        total_contributions = task_contributions + norm_contributions + direction_contributions
-        top_idx = torch.argsort(total_contributions, descending=True)
-        selected_params = params[top_idx[:int(len(params) * (2/3))]]
-        values = selected_params.mean(dim=0)
+        direction_selected = torch.argsort(direction_contributions, descending=True).tolist()[:-1]
+        selected_idx = list(set(task_selected) & set(norm_selected) & set(direction_selected))
+        values = params[selected_idx].mean(dim=0)
         return values

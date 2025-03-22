@@ -114,6 +114,7 @@ class Epuck2Supervisor(CSVSupervisorEnv):
         print(f"byzantine_robots: {self.byz_robots}")
         print(f"byzantine_style: {self.byz_style}")
         print(f"update method: {self.args.ratio_update_method}")
+        print(f"aggregation method: {self.args.grad_aggregation}")
         print(f"groups: {self.groups}")
         print(f"swarm: {self.swarm}")
         self.start_flag = True
