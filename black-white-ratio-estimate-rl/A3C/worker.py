@@ -108,6 +108,12 @@ class Leader(Server):
                             gradients = [grad[1] for grad in self.buffer_grad if isinstance(grad[1], list)]
                             tensor_gradients = torch.tensor(gradients, dtype=torch.float)
                             if "signflip" not in self.byz_style:
+                                # adversary_grad = self.adversary(
+                                #     tensor_gradients,
+                                #     num_byz=self.args.byz_num
+                                # )
+                                # for _ in range(self.args.byz_num):
+                                #     tensor_gradients = torch.cat((tensor_gradients, adversary_grad), dim=0)
                                 adversary_grad = self.adversary(
                                     tensor_gradients,
                                     num_byz=self.args.byz_num
@@ -372,7 +378,7 @@ class Worker:
                 grad, loss, c_loss, a_loss = self.model.train_and_get_grad(
                     bs, bmap, ba, br, bmask, done, s_, map_, gamma, opt, self.steps
                 )
-                grad *= -1
+                grad *= -2
                 msg = {
                     "id": self.id,
                     "info": {

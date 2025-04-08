@@ -14,8 +14,8 @@ class Adversary:
         if self.method == "noise":
             # self.mu = 2.0
             # self.sigma = 1.0
-            self.low = -1.0
-            self.high = 1.0
+            self.low = -2.0
+            self.high = 2.0
     
     def __call__(self, benign_gradients, *args, **kwargs) -> np.ndarray:
         """benign gradients: shape of (num_benign_agents, length of gradient)
@@ -60,7 +60,7 @@ class Adversary:
         
         res = mean + std * z_max
         
-        return res
+        return res*2
     
     def _ipm(self, benign_gradients: torch.Tensor, *args, **kwargs):
         mean = benign_gradients.mean(dim=0)

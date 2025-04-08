@@ -100,7 +100,7 @@ class Aggregator:
         self,
         params: torch.Tensor,
         num_excluded: int = 1,
-        num_aggregation: int = 4,
+        num_aggregation: int = 1,
         *args, **kwargs
     ):
         distances = self._pairwise_euclidean_distances(params)
